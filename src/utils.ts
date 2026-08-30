@@ -78,12 +78,27 @@ export function cardPreview(card: OioCard) {
 
 export function speak(text: string, language = "en-US") {
   if (!("speechSynthesis" in window)) return false;
-  window.speechSynthesis.cancel();
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.lang = language;
-  utterance.rate = 0.92;
-  window.speechSynthesis.speak(utterance);
-  return true;
+  try {
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = language;
+    utterance.rate = 0.92;
+    // 优先选择自然度高的英文本地发音引擎（如 Samantha、Daniel、Ava、Google 等）
+    const voices = window.speechSynthesis.getVoices();
+    if (voices.length > 0) {
+      const preferred = voices.find(
+        (v) => (v.lang === language || v.lang.startsWith("en")) && (v.localService || v.name.includes("Natural") || v.name.includes("Enhanced") || v.name.includes("Samantha") || v.name.includes("Daniel") || v.name.includes("Alex"))
+      ) || voices.find((v) => v.lang.startsWith("en"));
+      if (preferred) utterance.voice = preferred;
+    }
+    // Safari / iOS 某些版本下 cancel 后立即 speak 需要微小延迟以防挂起
+    window.setTimeout(() => {
+      window.speechSynthesis.speak(utterance);
+    }, 16);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function hashCardContent(card: Pick<OioCard, "body" | "tasks">) {

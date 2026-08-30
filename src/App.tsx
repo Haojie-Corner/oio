@@ -1747,12 +1747,14 @@ function ReviewScreen(props: {
           suffix = targetSentence.replace(regex, "");
         }
 
-        // 生成 3 个强干扰项（优先从用户其他卡片抽取，避免孤立背词）
-        const otherKeywords = keywordPool.filter((k) => k.toLowerCase() !== blank.toLowerCase());
-        const distractors: string[] = [];
+        // 生成 3 个强干扰项（优先从 AI 高质量迷惑项抽取，再从用户其他卡片与语境库抽取）
+        const meta = card.ai.keywordMeta?.find((m) => m.phrase.toLowerCase() === blank.toLowerCase());
+        const aiDistractors = (meta?.distractors || []).filter((d) => d.toLowerCase() !== blank.toLowerCase() && d.trim());
+        const otherKeywords = keywordPool.filter((k) => k.toLowerCase() !== blank.toLowerCase() && !aiDistractors.includes(k));
+        const distractors: string[] = [...aiDistractors];
         const shuffledOthers = [...otherKeywords].sort(() => 0.5 - Math.random());
         for (const item of shuffledOthers) {
-          if (distractors.length < 3) distractors.push(item);
+          if (distractors.length < 3 && !distractors.includes(item)) distractors.push(item);
         }
         const shuffledFallback = [...fallbackDistractors].sort(() => 0.5 - Math.random());
         for (const fb of shuffledFallback) {
@@ -1762,7 +1764,6 @@ function ReviewScreen(props: {
         }
 
         const options = [...distractors, matchedBlank].sort(() => 0.5 - Math.random());
-        const meta = card.ai.keywordMeta?.find((m) => m.phrase.toLowerCase() === blank.toLowerCase());
         const explanation = meta ? `${meta.phrase}：${meta.explanation}` : `地道表达「${matchedBlank}」在语境中的正确搭配。`;
 
         list.push({
