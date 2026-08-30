@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -279,9 +279,9 @@ export function App() {
     };
   }, [data.reload, sessionEmail]);
 
-  // 后台超高频对齐（切回前台、聚焦及 2.5 秒心跳，确保两端绝对一致；设置面板打开时暂停避免打扰用户输入）
+  // 后台超高频对齐（切回前台、聚焦及 2.5 秒心跳，确保两端绝对一致；在用户编辑/打字/设置时坚决暂停，避免打字延迟卡顿）
   useEffect(() => {
-    if (!cloudConfigured || !sessionEmail || !online || settingsOpen) return;
+    if (!cloudConfigured || !sessionEmail || !online || settingsOpen || view.name !== "home") return;
 
     const runSilentSync = async () => {
       try {
@@ -309,7 +309,7 @@ export function App() {
       document.removeEventListener("visibilitychange", handleVisibilityOrFocus);
       window.clearInterval(timer);
     };
-  }, [data.reload, online, sessionEmail, settingsOpen]);
+  }, [data.reload, online, sessionEmail, settingsOpen, view.name]);
 
   const filteredCards = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -1096,7 +1096,7 @@ function ActivityGrid({ cards, practiceDates }: { cards: OioCard[]; practiceDate
   return <div className="activity-wrap"><div className="activity-grid" aria-label={`最近 42 天有 ${activeDays} 天活跃`}>{cells.map((cell) => <i key={cell.key} className={cell.level} />)}</div></div>;
 }
 
-function CardEditor(props: { card?: OioCard; collections: OioCollection[]; categories: OioCategory[]; onCancel: () => void; onSave: (card: OioCard) => Promise<void> }) {
+const CardEditor = memo(function CardEditor(props: { card?: OioCard; collections: OioCollection[]; categories: OioCategory[]; onCancel: () => void; onSave: (card: OioCard) => Promise<void> }) {
   const [title, setTitle] = useState(props.card?.title ?? "");
   const [body, setBody] = useState(props.card?.body ?? "");
   const [collectionId, setCollectionId] = useState(props.card?.collectionId ?? props.collections[0]?.id ?? "life");
@@ -1152,7 +1152,7 @@ function CardEditor(props: { card?: OioCard; collections: OioCollection[]; categ
     </div>
     <footer className="editor-footer"><div className="media-actions"><button onClick={() => fileRef.current?.click()} aria-label="选择图片"><FileImage size={21} /></button><button onClick={() => cameraRef.current?.click()} aria-label="拍照"><Camera size={21} /></button><button className={recording ? "recording" : ""} onClick={startDictation} aria-label="语音输入"><Microphone size={21} /></button><input ref={fileRef} hidden type="file" accept="image/*" multiple onChange={(event) => void handleFiles(event.target.files)} /><input ref={cameraRef} hidden type="file" accept="image/*" capture="environment" onChange={(event) => void handleFiles(event.target.files)} /></div><span>{body.length}/5000</span><button className="primary-button" disabled={!body.trim()} onClick={() => void submit()}>完成</button></footer>
   </div>;
-}
+});
 
 function TaskToggle({ checked, label, onClick }: { checked: boolean; label: string; onClick: () => void }) {
   return <button className={checked ? "checked" : ""} onClick={onClick}><span>{checked ? <Check size={12} weight="bold" /> : null}</span>{label}</button>;
@@ -1567,6 +1567,52 @@ async function downloadExport() {
   URL.revokeObjectURL(url);
 }
 
+const AssistantInputBar = memo(function AssistantInputBar(props: {
+  busy: boolean;
+  onSend: (text: string) => void;
+}) {
+  const [input, setInput] = useState("");
+  const isComposingRef = useRef(false);
+
+  const doSend = () => {
+    const text = input.trim();
+    if (!text || props.busy) return;
+    props.onSend(text);
+    setInput("");
+  };
+
+  return (
+    <footer className="assistant-input-bar">
+      <div className="assistant-input-container">
+        <input
+          type="text"
+          className="assistant-input-field"
+          value={input}
+          placeholder="输入中文、英文或中英混合…"
+          onChange={(event) => setInput(event.target.value)}
+          onCompositionStart={() => { isComposingRef.current = true; }}
+          onCompositionEnd={() => { isComposingRef.current = false; }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !isComposingRef.current && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              doSend();
+            }
+          }}
+        />
+        <button
+          type="button"
+          className={`assistant-send-btn ${input.trim() ? "active" : ""}`}
+          disabled={props.busy || !input.trim()}
+          onClick={doSend}
+          aria-label="发送"
+        >
+          {props.busy ? <CircleNotch className="spin" size={18} /> : <PaperPlaneRight size={18} weight={input.trim() ? "fill" : "bold"} />}
+        </button>
+      </div>
+    </footer>
+  );
+});
+
 function AssistantScreen(props: {
   aiReady: boolean; onBack: () => void; onOpenSettings: () => void;
   onSaveCard: (content: string) => Promise<unknown>;
@@ -1574,18 +1620,14 @@ function AssistantScreen(props: {
   notify: (message: string) => void;
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" }); }, [messages, busy]);
 
-  const send = async () => {
-    const text = input.trim();
-    if (!text || busy) return;
+  const send = useCallback(async (text: string) => {
     const history: ChatMessage[] = [...messages, { role: "user", content: text }];
     setMessages(history);
-    setInput("");
     setBusy(true);
     try {
       const reply = await askAssistant(history);
@@ -1596,7 +1638,7 @@ function AssistantScreen(props: {
     } finally {
       setBusy(false);
     }
-  };
+  }, [messages, props]);
 
   return <div className="full-screen assistant-screen">
     <header className="screen-header"><button className="icon-button" onClick={props.onBack} aria-label="返回"><ArrowLeft size={22} /></button><h1>AI 助手</h1><span /></header>
@@ -1616,32 +1658,7 @@ function AssistantScreen(props: {
       ))}
       {busy ? <div className="chat-message assistant"><div className="chat-bubble"><CircleNotch className="spin" size={15} /> 正在思考…</div></div> : null}
     </div>
-    <footer className="assistant-input-bar">
-      <div className="assistant-input-container">
-        <input
-          type="text"
-          className="assistant-input-field"
-          value={input}
-          placeholder="输入中文、英文或中英混合…"
-          onChange={(event) => setInput(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              void send();
-            }
-          }}
-        />
-        <button
-          type="button"
-          className={`assistant-send-btn ${input.trim() ? "active" : ""}`}
-          disabled={busy || !input.trim()}
-          onClick={() => void send()}
-          aria-label="发送"
-        >
-          {busy ? <CircleNotch className="spin" size={18} /> : <PaperPlaneRight size={18} weight={input.trim() ? "fill" : "bold"} />}
-        </button>
-      </div>
-    </footer>
+    <AssistantInputBar busy={busy} onSend={send} />
   </div>;
 }
 
