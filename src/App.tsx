@@ -1607,7 +1607,7 @@ function AssistantScreen(props: {
         <button className="primary-button" onClick={props.onOpenSettings}>去设置</button>
       </div> : messages.length === 0 && !busy ? <div className="assistant-notice">
         <Brain size={34} />
-        <p>输入中文、英文或中英混合，我会帮你整理成自然、地道的英文，并讲解关键表达。生成的内容可以一键存为卡片，继续挖空练习。</p>
+        <p>随时和我随心聊天、请教地道英文说法或吐槽日常，简短轻松，聊到的好句子一键存为卡片。</p>
       </div> : messages.map((message, index) => (
         <div key={index} className={`chat-message ${message.role}`}>
           <div className="chat-bubble">{message.content}</div>
