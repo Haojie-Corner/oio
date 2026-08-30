@@ -20,14 +20,17 @@ export function deriveAutoTitle(body: string, aiTitle?: string, chineseMeaning?:
   }
   // 如果输入是纯英文，根据语义关键词智能映射中文主题（绝不输出英文切片）
   const lower = trimmed.toLowerCase();
-  if (/\b(weather|sunny|rain|snow|hot|cold|warm|cloudy|wind|storm|spring|summer|autumn|winter)\b/i.test(lower)) return "晴朗好天气与日常";
-  if (/\b(dinner|lunch|breakfast|cook|eat|food|coffee|tea|restaurant|delicious|meal|dish)\b/i.test(lower)) return "美食与烹饪聚餐";
   if (/\b(welcome|home|friend|party|meet|visit|guest|invite)\b/i.test(lower)) return "朋友聚会与拜访";
+  if (/\b(dinner|lunch|breakfast|cook|eat|food|coffee|tea|restaurant|delicious|meal|dish)\b/i.test(lower)) return "美食与烹饪聚餐";
+  if (/\b(weather|sunny|rain|snow|hot|cold|warm|cloudy|wind|storm|spring|summer|autumn|winter)\b/i.test(lower)) return "晴朗好天气与日常";
   if (/\b(work|meeting|project|office|job|busy|deadline|boss|email|company)\b/i.test(lower)) return "职场工作与任务";
   if (/\b(study|learn|book|english|read|exam|school|class|practice)\b/i.test(lower)) return "学习与语言心得";
   if (/\b(drive|car|train|bus|flight|trip|travel|subway|walk|traffic|hotel)\b/i.test(lower)) return "出行与旅途碎念";
   if (/\b(happy|tired|sleep|relax|weekend|morning|night|exhausted|feeling|mood)\b/i.test(lower)) return "生活随笔与心境";
-  return "地道日常表达";
+  if (/\b(who\s+are\s+you|what('s|\s+is)\s+your\s+name|my\s+name\s+is|i\s+am\s+|nice\s+to\s+meet)\b/i.test(lower)) return "自我介绍与打招呼";
+  if (/\b(thank|thanks|grateful|appreciate)\b/i.test(lower)) return "感谢与礼貌客套";
+  if (/\b(how\s+are\s+you|good\s+morning|good\s+afternoon|good\s+evening|hey|hello|hi)\b/i.test(lower)) return "日常问候与交流";
+  return "生活随笔记录";
 }
 
 export function dayKeyOf(date: Date) {
