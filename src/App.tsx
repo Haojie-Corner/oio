@@ -260,6 +260,8 @@ export function App() {
   const [transientCard, setTransientCard] = useState<OioCard | null>(null);
   const [batchMode, setBatchMode] = useState(false);
   const [selectedCardIds, setSelectedCardIds] = useState<Set<string>>(new Set());
+  const [batchProcessing, setBatchProcessing] = useState(false);
+  const [batchProgressText, setBatchProgressText] = useState("");
 
   const refreshSession = useCallback(async () => {
     if (!cloudConfigured) { setSessionEmail(null); return; }
@@ -388,6 +390,91 @@ export function App() {
     await data.reload();
   }, [data]);
 
+  const runBatchAi = useCallback(async (actionType: "rewrite" | "reply" | "organize" | "all") => {
+    if (selectedCardIds.size === 0) {
+      notify("请先勾选需要处理的卡片");
+      return;
+    }
+    if (batchProcessing) return;
+
+    const rawProvider = (await db.settings.get("settings"))?.provider || getLocalFallbackSettings()?.provider || data.settings?.provider;
+    const hasApiKey = Boolean(rawProvider?.apiKey?.trim());
+    const canUseAi = hasApiKey || Boolean(rawProvider?.enabled) || (Boolean(getSupabase()) && Boolean(await getSession()));
+    if (!canUseAi) {
+      notify("请先在设置中填写 API Key 或开启真实 AI");
+      return;
+    }
+
+    setBatchProcessing(true);
+    const targetCards = data.cards.filter((c) => selectedCardIds.has(c.id));
+    const total = targetCards.length;
+    let completedCount = 0;
+    setBatchProgressText(`1/${total}`);
+
+    const labelMap: Record<string, string> = {
+      rewrite: "目标语言改写",
+      reply: "目标语言回复",
+      organize: "原始输入整理",
+      all: "完整 AI 处理",
+    };
+
+    notify(`开始批量${labelMap[actionType]}（共 ${total} 条）...`);
+
+    for (const card of targetCards) {
+      const nextTasks = actionType === "all"
+        ? (["organize", "rewrite", "reply"] as AITask[])
+        : Array.from(new Set([...(card.tasks || []), actionType])) as AITask[];
+      await data.saveCard({ ...card, tasks: nextTasks, ai: { ...card.ai, status: "processing" } });
+    }
+
+    const concurrency = 2;
+    const queue = [...targetCards];
+
+    const worker = async () => {
+      while (queue.length > 0) {
+        const card = queue.shift();
+        if (!card) break;
+        try {
+          const nextTasks = actionType === "all"
+            ? (["organize", "rewrite", "reply"] as AITask[])
+            : Array.from(new Set([...(card.tasks || []), actionType])) as AITask[];
+          const hasCustomTitle = Boolean(card.title?.trim() && !isAutoOrGenericTitle(card.title));
+          const cardToProcess: OioCard = {
+            ...card,
+            tasks: nextTasks,
+            title: hasCustomTitle ? card.title : "",
+            ai: { ...card.ai, status: "processing", contentHash: undefined },
+          };
+          const aiResult = await processCardWithAI(cardToProcess);
+          let finalCard: OioCard = {
+            ...card,
+            tasks: nextTasks,
+            ai: aiResult,
+            updatedAt: new Date().toISOString(),
+          };
+          const aiChineseTitle = (aiResult.suggestedTitle?.trim() && hasChineseText(aiResult.suggestedTitle))
+            ? aiResult.suggestedTitle.trim()
+            : (aiResult.chineseMeaning?.trim() && hasChineseText(aiResult.chineseMeaning)
+              ? aiResult.chineseMeaning.trim().slice(0, 16)
+              : deriveAutoTitle(finalCard.body));
+          finalCard.title = hasCustomTitle ? card.title : aiChineseTitle;
+          await data.saveCard(finalCard);
+          await data.recordAiUsage(aiResult);
+        } catch (err) {
+          console.warn(`Card ${card.id} batch AI failed`, err);
+        } finally {
+          completedCount++;
+          setBatchProgressText(`${Math.min(completedCount + 1, total)}/${total}`);
+        }
+      }
+    };
+
+    await Promise.all(Array.from({ length: Math.min(concurrency, total) }, () => worker()));
+    setBatchProcessing(false);
+    setBatchProgressText("");
+    notify(`🎉 已完成 ${total} 条卡片的批量${labelMap[actionType]}！`);
+  }, [batchProcessing, data, notify, selectedCardIds]);
+
   if (!data.ready) return <LoadingScreen />;
 
   const activeCard = (view.name === "detail" || view.name === "editor") && view.cardId
@@ -418,35 +505,89 @@ export function App() {
             onGame={() => setView({ name: "review" })}
           />
 
-          <div className="card-list-header">
+          <div className={`card-list-header ${batchMode ? "in-batch-header" : ""}`}>
             {batchMode ? (
-              <>
-                <button
-                  type="button"
-                  className="batch-action-btn select-all"
-                  onClick={() => {
-                    if (selectedCardIds.size === filteredCards.length) {
+              <div className="batch-header-box">
+                <div className="batch-header-top">
+                  <button
+                    type="button"
+                    className="batch-action-btn select-all"
+                    onClick={() => {
+                      if (selectedCardIds.size === filteredCards.length) {
+                        setSelectedCardIds(new Set());
+                      } else {
+                        setSelectedCardIds(new Set(filteredCards.map((c) => c.id)));
+                      }
+                    }}
+                  >
+                    <CheckSquare size={16} weight="bold" />
+                    <span>{selectedCardIds.size === filteredCards.length ? "取消全选" : "全选"}</span>
+                    <span className="batch-count">({selectedCardIds.size}/{filteredCards.length})</span>
+                  </button>
+
+                  {batchProcessing ? (
+                    <div className="batch-processing-tag">
+                      <CircleNotch size={14} className="spin" />
+                      <span>{batchProgressText ? `处理中 (${batchProgressText})` : "处理中..."}</span>
+                    </div>
+                  ) : null}
+
+                  <button
+                    type="button"
+                    className="batch-action-btn cancel"
+                    onClick={() => {
+                      setBatchMode(false);
                       setSelectedCardIds(new Set());
-                    } else {
-                      setSelectedCardIds(new Set(filteredCards.map((c) => c.id)));
-                    }
-                  }}
-                >
-                  <CheckSquare size={16} weight="bold" />
-                  <span>{selectedCardIds.size === filteredCards.length ? "取消全选" : "全选"}</span>
-                  <span className="batch-count">({selectedCardIds.size}/{filteredCards.length})</span>
-                </button>
-                <button
-                  type="button"
-                  className="batch-action-btn cancel"
-                  onClick={() => {
-                    setBatchMode(false);
-                    setSelectedCardIds(new Set());
-                  }}
-                >
-                  完成
-                </button>
-              </>
+                    }}
+                  >
+                    完成
+                  </button>
+                </div>
+
+                <div className="batch-actions-row">
+                  <span className="batch-actions-label">批量操作：</span>
+                  <button
+                    type="button"
+                    disabled={batchProcessing}
+                    className="batch-action-pill"
+                    onClick={() => void runBatchAi("rewrite")}
+                    title="为选中卡片生成母语级地道英文改写与练习"
+                  >
+                    <NotePencil size={15} />
+                    <span>目标语言改写</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={batchProcessing}
+                    className="batch-action-pill"
+                    onClick={() => void runBatchAi("reply")}
+                    title="为选中卡片生成母语级自然接话与回复"
+                  >
+                    <PaperPlaneRight size={15} />
+                    <span>目标语言回复</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={batchProcessing}
+                    className="batch-action-pill"
+                    onClick={() => void runBatchAi("organize")}
+                    title="为选中卡片整理标点语法并深度提炼中文主题"
+                  >
+                    <ClipboardText size={15} />
+                    <span>语言整理</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={batchProcessing}
+                    className="batch-action-pill accent"
+                    onClick={() => void runBatchAi("all")}
+                    title="一键同时完成改写、回复、整理与主题提炼"
+                  >
+                    <Sparkle size={15} weight="fill" />
+                    <span>完整 AI 处理</span>
+                  </button>
+                </div>
+              </div>
             ) : (
               <>
                 <span className="card-list-count">共 {filteredCards.length} 条记录</span>
@@ -497,26 +638,38 @@ export function App() {
         {batchMode && selectedCardIds.size > 0 ? (
           <div className="batch-floating-bar">
             <div className="batch-floating-info">
-              <span>已选中 <strong>{selectedCardIds.size}</strong> 条记录</span>
+              <span>已选 <strong>{selectedCardIds.size}</strong> 项</span>
             </div>
-            <button
-              type="button"
-              className="batch-delete-btn"
-              onClick={async () => {
-                const count = selectedCardIds.size;
-                if (window.confirm(`确定要将选中的 ${count} 条记录移入回收站吗？`)) {
-                  for (const id of selectedCardIds) {
-                    await data.deleteCard(id);
+            <div className="batch-floating-btns">
+              <button
+                type="button"
+                disabled={batchProcessing}
+                className="batch-floating-ai-btn"
+                onClick={() => void runBatchAi("all")}
+              >
+                <Sparkle size={16} weight="fill" />
+                <span>批量 AI 处理</span>
+              </button>
+              <button
+                type="button"
+                disabled={batchProcessing}
+                className="batch-delete-btn"
+                onClick={async () => {
+                  const count = selectedCardIds.size;
+                  if (window.confirm(`确定要将选中的 ${count} 条记录移入回收站吗？`)) {
+                    for (const id of selectedCardIds) {
+                      await data.deleteCard(id);
+                    }
+                    notify(`已将 ${count} 条记录移入回收站`);
+                    setSelectedCardIds(new Set());
+                    setBatchMode(false);
                   }
-                  notify(`已将 ${count} 条记录移入回收站`);
-                  setSelectedCardIds(new Set());
-                  setBatchMode(false);
-                }
-              }}
-            >
-              <Trash size={18} />
-              <span>批量删除 ({selectedCardIds.size})</span>
-            </button>
+                }}
+              >
+                <Trash size={18} />
+                <span>删除</span>
+              </button>
+            </div>
           </div>
         ) : null}
 
