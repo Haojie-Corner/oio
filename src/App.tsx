@@ -51,6 +51,7 @@ import {
   emptyTrashOnCloud,
   getLocalFallbackSettings,
   getSession,
+  getSupabase,
   purgeCardOnCloud,
   pushCardToCloud,
   resetPassword,
@@ -530,10 +531,17 @@ export function App() {
               const saved = await data.saveCard({ ...card, title: userExplicitTitle || tempTitle });
               setTransientCard(saved);
               setView({ name: "detail", cardId: saved.id });
-              if (data.settings.provider.enabled) {
+
+              const rawProvider = (await db.settings.get("settings"))?.provider || getLocalFallbackSettings()?.provider || data.settings?.provider;
+              const hasApiKey = Boolean(rawProvider?.apiKey?.trim());
+              const canUseAi = hasApiKey || Boolean(rawProvider?.enabled) || (Boolean(getSupabase()) && Boolean(await getSession()));
+
+              if (canUseAi) {
                 try {
-                  await data.saveCard({ ...saved, ai: { ...saved.ai, status: "processing" } });
-                  const cardToProcess = { ...saved, title: userExplicitTitle };
+                  const cardProcessing: OioCard = { ...saved, ai: { ...saved.ai, status: "processing" } };
+                  await data.saveCard(cardProcessing);
+                  setTransientCard(cardProcessing);
+                  const cardToProcess: OioCard = { ...saved, title: userExplicitTitle, tasks: (saved.tasks.length ? saved.tasks : ["organize", "rewrite", "reply"]) as AITask[] };
                   const ai = await processCardWithAI(cardToProcess);
                   let finalCard: OioCard = { ...saved, ai, updatedAt: new Date().toISOString() };
                   const aiChineseTitle = (ai.suggestedTitle?.trim() && hasChineseText(ai.suggestedTitle))
@@ -557,13 +565,13 @@ export function App() {
                   const updatedSaved = await data.saveCard(finalCard);
                   setTransientCard(updatedSaved);
                   await data.recordAiUsage(ai);
-                  notify(folder && folder !== "生活集" ? `AI 分析完成，已归入「${folder}」` : "AI 分析完成，已提炼中文主题");
+                  notify(folder && folder !== "生活集" ? `AI 分析完成，已归入「${folder}」` : "AI 已完成整理与主题提炼");
                 } catch (error) {
                   console.warn("AI error:", error);
-                  notify(error instanceof Error ? error.message : "AI 暂不可用");
+                  notify(error instanceof Error ? error.message : "AI 整理失败，请点右上角💡重试");
                 }
               } else {
-                notify("卡片已保存在本地");
+                notify("卡片已保存在本地（填入 API Key 即可开启 AI 自动整理）");
               }
             } catch (err) {
               console.error("Save card error:", err);
@@ -589,8 +597,10 @@ export function App() {
           onRegenerate={async () => {
             try {
               const hasCustomTitle = Boolean(activeCard.title?.trim() && !isAutoOrGenericTitle(activeCard.title));
-              await data.saveCard({ ...activeCard, ai: { ...activeCard.ai, status: "processing" } });
-              const ai = await processCardWithAI({ ...activeCard, title: hasCustomTitle ? activeCard.title : "", ai: { ...activeCard.ai, contentHash: undefined } });
+              const processingCard: OioCard = { ...activeCard, ai: { ...activeCard.ai, status: "processing" } };
+              await data.saveCard(processingCard);
+              setTransientCard(processingCard);
+              const ai = await processCardWithAI({ ...activeCard, title: hasCustomTitle ? activeCard.title : "", tasks: activeCard.tasks.length ? activeCard.tasks : ["organize", "rewrite", "reply"], ai: { ...activeCard.ai, contentHash: undefined } });
               let finalCard: OioCard = { ...activeCard, ai, updatedAt: new Date().toISOString() };
               const aiChineseTitle = (ai.suggestedTitle?.trim() && hasChineseText(ai.suggestedTitle))
                 ? ai.suggestedTitle.trim()
@@ -601,8 +611,13 @@ export function App() {
               const res = await data.saveCard(finalCard);
               setTransientCard(res);
               await data.recordAiUsage(ai);
-              notify("已重新生成中文主题与练习");
-            } catch (error) { notify(error instanceof Error ? error.message : "AI 暂不可用"); }
+              notify("已完成主题提炼与地道改写");
+            } catch (error) {
+              notify(error instanceof Error ? error.message : "AI 暂不可用");
+              const reverted: OioCard = { ...activeCard, ai: { ...activeCard.ai, status: "idle" } };
+              await data.saveCard(reverted);
+              setTransientCard(reverted);
+            }
           }}
           notify={notify}
         />
@@ -1176,7 +1191,7 @@ const CardEditor = memo(function CardEditor(props: { card?: OioCard; collections
   const countSpanRef = useRef<HTMLSpanElement>(null);
   const [collectionId, setCollectionId] = useState(props.card?.collectionId ?? props.collections[0]?.id ?? "life");
   const [categoryId] = useState(props.card?.categoryId ?? "uncategorized");
-  const [tasks, setTasks] = useState<AITask[]>(props.card?.tasks ?? []);
+  const [tasks, setTasks] = useState<AITask[]>(props.card?.tasks?.length ? props.card.tasks : ["organize", "rewrite", "reply"]);
   const [attachments, setAttachments] = useState(props.card?.attachments ?? []);
   const [recording, setRecording] = useState(false);
   const [interimText, setInterimText] = useState("");
@@ -1213,7 +1228,7 @@ const CardEditor = memo(function CardEditor(props: { card?: OioCard; collections
         categoryId,
         title: cleanTitle,
         body: trimmed,
-        tasks: tasks.length ? tasks : ["rewrite", "reply"],
+        tasks: tasks.length ? tasks : ["organize", "rewrite", "reply"],
         attachments,
         ai: props.card && props.card.body === trimmed ? props.card.ai : emptyAI,
         createdAt: props.card?.createdAt ?? now,
@@ -1337,6 +1352,18 @@ const PRACTICE_TITLES: Record<PracticeMode, string> = {
 function CardDetail(props: { card: OioCard; allCards: OioCard[]; initialPractice?: PracticeMode; onBack: () => void; onEdit: () => void; onOpenCard: (id: string) => void; onPractice: (cardId: string, mode: PracticeMode, correct: boolean) => void; onUpdateCard: (next: OioCard) => Promise<void>; onRegenerate: () => Promise<void>; notify: (message: string) => void }) {
   const [practice, setPractice] = useState<PracticeMode | undefined>(props.initialPractice);
   const [collapsed, setCollapsed] = useState({ original: false, rewrite: false, reply: false });
+
+  // 核心：若卡片尚未经过 AI 整理（不论新建还是老卡片），一旦打开详情页自动触发 AI 整理
+  const autoTriggeredRef = useRef<string | null>(null);
+  useEffect(() => {
+    const isUnprocessed = !props.card.ai || props.card.ai.status !== "ready";
+    if (isUnprocessed && props.card.ai?.status !== "processing" && autoTriggeredRef.current !== props.card.id && props.card.body.trim()) {
+      autoTriggeredRef.current = props.card.id;
+      void props.onRegenerate();
+    }
+  }, [props.card.id, props.card.ai?.status, props.card.body, props.onRegenerate]);
+
+  const isProcessing = props.card.ai?.status === "processing";
   const sentences = props.card.ai.rewrittenSentences.length ? props.card.ai.rewrittenSentences : [props.card.body];
   const blanks = props.card.ai.practiceKeywords;
   const cloze = clozeSentence(sentences.join(" "), blanks);
@@ -1358,20 +1385,22 @@ function CardDetail(props: { card: OioCard; allCards: OioCard[]; initialPractice
   const aiTitle = props.card.ai?.suggestedTitle?.trim();
   const hasValidAiTitle = Boolean(aiTitle && hasChineseText(aiTitle) && !isAutoOrGenericTitle(aiTitle));
   const hasUserCustomTitle = Boolean(props.card.title?.trim() && !isAutoOrGenericTitle(props.card.title));
-  const cardTitle = hasValidAiTitle
-    ? aiTitle!
-    : (hasUserCustomTitle
-      ? props.card.title.trim()
-      : (aiTitle && hasChineseText(aiTitle)
-        ? aiTitle
-        : (props.card.ai?.chineseMeaning?.trim() && hasChineseText(props.card.ai.chineseMeaning)
-          ? props.card.ai.chineseMeaning.trim().slice(0, 16)
-          : props.card.title?.trim() || deriveAutoTitle(props.card.body))));
+  const cardTitle = isProcessing
+    ? "正在提炼主题与改写…"
+    : (hasValidAiTitle
+      ? aiTitle!
+      : (hasUserCustomTitle
+        ? props.card.title.trim()
+        : (aiTitle && hasChineseText(aiTitle)
+          ? aiTitle
+          : (props.card.ai?.chineseMeaning?.trim() && hasChineseText(props.card.ai.chineseMeaning)
+            ? props.card.ai.chineseMeaning.trim().slice(0, 16)
+            : props.card.title?.trim() || deriveAutoTitle(props.card.body)))));
 
   return <div className="full-screen detail-screen">
     <header className="detail-header"><button className="icon-button" onClick={props.onBack} aria-label="返回"><ArrowLeft size={22} /></button><div><button className="icon-button accent" onClick={() => void props.onRegenerate()} title="重新生成 AI 内容" aria-label="重新生成 AI 内容"><Lightbulb size={20} /></button><button className="icon-button" onClick={props.onEdit} aria-label="编辑卡片"><NotePencil size={21} /></button></div></header>
     <article className="detail-card">
-      <div className="detail-title"><h1>{cardTitle}</h1><span>{formatFullDate(props.card.createdAt)} · {formatTime(props.card.createdAt)}</span></div>
+      <div className="detail-title"><h1>{cardTitle}</h1><span>{formatFullDate(props.card.createdAt)} · {formatTime(props.card.createdAt)} {isProcessing ? "· 🤖 AI 正在整理中…" : ""}</span></div>
       {practice ? null : (
         <DetailSection title="我的记录" collapsed={collapsed.original} onToggle={() => setCollapsed((value) => ({ ...value, original: !value.original }))}>
           <div className="sentence-row">
@@ -1400,7 +1429,7 @@ function CardDetail(props: { card: OioCard; allCards: OioCard[]; initialPractice
       </DetailSection>
       {practice ? null : (
         <DetailSection title="回复" collapsed={collapsed.reply} onToggle={() => setCollapsed((value) => ({ ...value, reply: !value.reply }))}>
-          <div className="sentence-row"><p>{props.card.ai.reply || "连接 AI 后，这里会给出自然的目标语言回复。"}</p>{props.card.ai.reply ? <button onClick={() => speak(props.card.ai.reply)} aria-label="朗读回复"><Play size={18} weight="fill" /></button> : null}</div>
+          <div className="sentence-row"><p>{isProcessing ? "正在生成地道回复…" : (props.card.ai.reply || "连接 AI 后，这里会给出自然的目标语言回复。")}</p>{props.card.ai.reply ? <button onClick={() => speak(props.card.ai.reply)} aria-label="朗读回复"><Play size={18} weight="fill" /></button> : null}</div>
           {props.card.ai.reply ? <button className="section-copy" onClick={() => void copy(props.card.ai.reply)}><Copy size={17} />复制回复</button> : null}
         </DetailSection>
       )}

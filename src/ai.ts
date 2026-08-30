@@ -19,9 +19,19 @@ export interface AssistantReply {
 
 /** AI 助手对话：与改写/整理共用同一个服务商配置（同一个 API Key） */
 export async function askAssistant(history: ChatMessage[]): Promise<AssistantReply> {
-  const provider = ((await db.settings.get("settings")) || getLocalFallbackSettings())?.provider;
-  if (!provider?.enabled || !provider.baseUrl || !provider.model || !provider.apiKey) {
-    throw new Error("请先在设置里填写模型名和 API Key，并打开「启用真实 AI」。");
+  const rawProvider = ((await db.settings.get("settings")) || getLocalFallbackSettings())?.provider;
+  if (!rawProvider?.apiKey?.trim() && !rawProvider?.enabled) {
+    throw new Error("请先在设置里填写 API Key 并启用 AI。");
+  }
+  const provider: AIProviderConfig = {
+    ...rawProvider,
+    baseUrl: rawProvider?.baseUrl?.trim() || "https://api.deepseek.com/v1",
+    model: rawProvider?.model?.trim() || "deepseek-chat",
+    apiKey: rawProvider?.apiKey?.trim() || "",
+    enabled: true,
+  };
+  if (!provider.apiKey) {
+    throw new Error("请先在设置里填写 API Key。");
   }
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 60_000);
@@ -139,6 +149,7 @@ async function callProviderDirect(provider: AIProviderConfig, card: OioCard, has
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 60_000);
   let response: Response;
+  const effectiveTasks = card.tasks?.length ? card.tasks : ["organize", "rewrite", "reply"];
   try {
     response = await fetch(`${provider.baseUrl.replace(/\/$/, "")}/chat/completions`, {
       method: "POST",
@@ -150,7 +161,7 @@ async function callProviderDirect(provider: AIProviderConfig, card: OioCard, has
         response_format: { type: "json_object" },
         messages: [
           { role: "system", content: "Return valid JSON only. Be concise, friendly, and pedagogically accurate." },
-          { role: "user", content: buildPrompt(card.tasks, card.title, card.body.trim()) },
+          { role: "user", content: buildPrompt(effectiveTasks, card.title, card.body.trim()) },
         ],
       }),
     });
@@ -194,10 +205,17 @@ export async function processCardWithAI(card: OioCard): Promise<CardAIResult> {
   const hash = await hashCardContent(card);
   if (card.ai.status === "ready" && card.ai.contentHash === hash) return card.ai;
 
-  // 本地直连优先：Key 在本机、请求直达服务商，不依赖任何服务端
-  const provider = ((await db.settings.get("settings")) || getLocalFallbackSettings())?.provider;
-  if (provider?.enabled && provider.baseUrl && provider.model && provider.apiKey) {
-    return callProviderDirect(provider, card, hash);
+  // 本地直连优先：只要有 API Key，自动补全默认的 baseUrl 与 model 直连
+  const rawProvider = ((await db.settings.get("settings")) || getLocalFallbackSettings())?.provider;
+  if (rawProvider?.apiKey?.trim()) {
+    const activeProvider: AIProviderConfig = {
+      ...rawProvider,
+      baseUrl: rawProvider.baseUrl?.trim() || "https://api.deepseek.com/v1",
+      model: rawProvider.model?.trim() || "deepseek-chat",
+      apiKey: rawProvider.apiKey.trim(),
+      enabled: true,
+    };
+    return callProviderDirect(activeProvider, card, hash);
   }
 
   // 本地配置不全时，已登录用户回退到云端函数
