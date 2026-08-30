@@ -645,7 +645,7 @@ function ReviewStrip({
   return <nav className="review-strip" aria-label="快速回顾">
     <button onClick={onRecent}>回顾近期</button>
     <button onClick={onBlindBox}>记忆盲盒</button>
-    <button onClick={onGame}>记忆游戏<span className="badge-dot" /></button>
+    <button onClick={onGame}>记忆游戏</button>
   </nav>;
 }
 
