@@ -1141,11 +1141,12 @@ function ActivityGrid({ cards, practiceDates }: { cards: OioCard[]; practiceDate
 }
 
 const CardEditor = memo(function CardEditor(props: { card?: OioCard; collections: OioCollection[]; categories: OioCategory[]; onCancel: () => void; onSave: (card: OioCard) => Promise<void> }) {
-  const [title, setTitle] = useState(props.card?.title ?? "");
-  const [body, setBody] = useState(props.card?.body ?? "");
+  const titleRef = useRef<HTMLInputElement>(null);
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
+  const [hasContent, setHasContent] = useState(Boolean(props.card?.body?.trim()));
+  const [charCount, setCharCount] = useState(props.card?.body?.length ?? 0);
   const [collectionId, setCollectionId] = useState(props.card?.collectionId ?? props.collections[0]?.id ?? "life");
   const [categoryId] = useState(props.card?.categoryId ?? "uncategorized");
-  // 改写为按需选择：新建默认不勾选，由用户针对某一篇笔记手动开启
   const [tasks, setTasks] = useState<AITask[]>(props.card?.tasks ?? []);
   const [attachments, setAttachments] = useState(props.card?.attachments ?? []);
   const [recording, setRecording] = useState(false);
@@ -1154,20 +1155,29 @@ const CardEditor = memo(function CardEditor(props: { card?: OioCard; collections
   const fileRef = useRef<HTMLInputElement>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
 
+  const syncBodyStats = () => {
+    const val = bodyRef.current?.value ?? "";
+    setCharCount(val.length);
+    setHasContent(Boolean(val.trim()));
+  };
+
   const toggleTask = (task: AITask) => setTasks((current) => current.includes(task) ? current.filter((item) => item !== task) : [...current, task]);
+  
   const submit = async () => {
-    if (!body.trim()) return;
+    const rawBody = bodyRef.current?.value ?? "";
+    const trimmed = rawBody.trim();
+    if (!trimmed) return;
     const now = new Date().toISOString();
-    const cleanTitle = title.trim();
+    const cleanTitle = (titleRef.current?.value ?? "").trim();
     await props.onSave({
       id: props.card?.id ?? makeId("card"),
       collectionId,
       categoryId,
       title: cleanTitle,
-      body: body.trim(),
+      body: trimmed,
       tasks: tasks.length ? tasks : ["rewrite", "reply"],
       attachments,
-      ai: props.card && props.card.body === body.trim() ? props.card.ai : emptyAI,
+      ai: props.card && props.card.body === trimmed ? props.card.ai : emptyAI,
       createdAt: props.card?.createdAt ?? now,
       updatedAt: now,
       syncState: "pending",
@@ -1221,8 +1231,10 @@ const CardEditor = memo(function CardEditor(props: { card?: OioCard; collections
           }
         }
 
-        if (finalTranscript) {
-          setBody((prev) => `${prev ? prev + (prev.endsWith("\n") || prev.endsWith(" ") ? "" : " ") : ""}${finalTranscript}`);
+        if (finalTranscript && bodyRef.current) {
+          const prev = bodyRef.current.value;
+          bodyRef.current.value = `${prev ? prev + (prev.endsWith("\n") || prev.endsWith(" ") ? "" : " ") : ""}${finalTranscript}`;
+          syncBodyStats();
         }
         setInterimText(currentInterim);
       };
@@ -1255,8 +1267,8 @@ const CardEditor = memo(function CardEditor(props: { card?: OioCard; collections
     <div className="editor-meta"><label><FolderSimple size={18} /><select value={collectionId} onChange={(event) => setCollectionId(event.target.value)}>{props.collections.map((collection) => <option key={collection.id} value={collection.id}>{collection.name}</option>)}</select></label><span>{props.categories.find((category) => category.id === categoryId)?.name ?? "未分类"}<CaretRight size={16} /></span></div>
     <div className="editor-body">
       {recording ? <div className="recording-status-banner"><span className="recording-dot" /> 正在倾听中… {interimText ? `「${interimText}」` : "请说话"}（点击麦克风结束）</div> : null}
-      <input className="title-input" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="标题（留空自动生成中文主题）" />
-      <textarea autoFocus value={body} onChange={(event) => setBody(event.target.value.slice(0, 5000))} placeholder="记录此刻想说的事……" />
+      <input ref={titleRef} className="title-input" defaultValue={props.card?.title ?? ""} placeholder="标题（留空自动由 AI 提炼中文主题）" />
+      <textarea ref={bodyRef} autoFocus defaultValue={props.card?.body ?? ""} onInput={syncBodyStats} placeholder="记录此刻想说的事……" />
       {attachments.length ? <div className="attachment-grid">{attachments.map((attachment) => <figure key={attachment.id}><img src={attachment.dataUrl} alt={attachment.name} /><button onClick={() => setAttachments((items) => items.filter((item) => item.id !== attachment.id))}><X size={15} /></button></figure>)}</div> : null}
     </div>
     <div className="task-options">
@@ -1264,7 +1276,7 @@ const CardEditor = memo(function CardEditor(props: { card?: OioCard; collections
       <TaskToggle checked={tasks.includes("reply")} label="目标语言回复" onClick={() => toggleTask("reply")} />
       <TaskToggle checked={tasks.includes("rewrite")} label="目标语言改写" onClick={() => toggleTask("rewrite")} />
     </div>
-    <footer className="editor-footer"><div className="media-actions"><button onClick={() => fileRef.current?.click()} aria-label="选择图片"><FileImage size={21} /></button><button onClick={() => cameraRef.current?.click()} aria-label="拍照"><Camera size={21} /></button><button className={recording ? "recording" : ""} onClick={toggleDictation} aria-label={recording ? "停止录音" : "语音输入"}><Microphone size={21} /></button><input ref={fileRef} hidden type="file" accept="image/*" multiple onChange={(event) => void handleFiles(event.target.files)} /><input ref={cameraRef} hidden type="file" accept="image/*" capture="environment" onChange={(event) => void handleFiles(event.target.files)} /></div><span>{body.length}/5000</span><button className="primary-button" disabled={!body.trim()} onClick={() => void submit()}>完成</button></footer>
+    <footer className="editor-footer"><div className="media-actions"><button onClick={() => fileRef.current?.click()} aria-label="选择图片"><FileImage size={21} /></button><button onClick={() => cameraRef.current?.click()} aria-label="拍照"><Camera size={21} /></button><button className={recording ? "recording" : ""} onClick={toggleDictation} aria-label={recording ? "停止录音" : "语音输入"}><Microphone size={21} /></button><input ref={fileRef} hidden type="file" accept="image/*" multiple onChange={(event) => void handleFiles(event.target.files)} /><input ref={cameraRef} hidden type="file" accept="image/*" capture="environment" onChange={(event) => void handleFiles(event.target.files)} /></div><span>{charCount}/5000</span><button className="primary-button" disabled={!hasContent} onClick={() => void submit()}>完成</button></footer>
   </div>;
 });
 
