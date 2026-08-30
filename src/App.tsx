@@ -1720,7 +1720,6 @@ function ReviewScreen(props: {
     props.onPractice?.(currentQ.cardId, "cloze", isCorrect);
 
     if (isCorrect) {
-      speak(currentQ.fullSentence);
       const nextStreak = streak + 1;
       setStreak(nextStreak);
       setMaxStreak((m) => Math.max(m, nextStreak));
@@ -1821,7 +1820,18 @@ function ReviewScreen(props: {
 
       <main className="game-main">
         <article className="game-card">
-          <span className="game-prompt-tag">语境挖空 · 主动提取</span>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span className="game-prompt-tag">语境挖空 · 主动提取</span>
+            <button
+              className="icon-button"
+              style={{ width: 32, height: 32, color: "#666" }}
+              onClick={() => speak(currentQ.fullSentence)}
+              title="朗读句子"
+              aria-label="朗读本句"
+            >
+              <SpeakerHigh size={18} />
+            </button>
+          </div>
 
           <div className="game-sentence">
             {currentQ.prefix}
