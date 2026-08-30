@@ -157,6 +157,15 @@ function useOioData() {
   const saveCard = useCallback(async (card: OioCard) => {
     const next = { ...card, isDemo: false, updatedAt: new Date().toISOString(), syncState: "synced" as const };
     await db.cards.put(next);
+    setCards((prev) => {
+      const idx = prev.findIndex((c) => c.id === next.id);
+      if (idx >= 0) {
+        const copy = [...prev];
+        copy[idx] = next;
+        return copy;
+      }
+      return [next, ...prev];
+    });
     await reload();
     void pushCardToCloud(next).catch(() => undefined);
     return next;
@@ -244,6 +253,7 @@ export function App() {
   const [online, setOnline] = useState(navigator.onLine);
   const [sessionEmail, setSessionEmail] = useState<string | null>(null);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [transientCard, setTransientCard] = useState<OioCard | null>(null);
 
   const refreshSession = useCallback(async () => {
     if (!cloudConfigured) { setSessionEmail(null); return; }
@@ -374,8 +384,8 @@ export function App() {
 
   if (!data.ready) return <LoadingScreen />;
 
-  const activeCard = view.name === "detail" || view.name === "editor" && view.cardId
-    ? data.cards.find((card) => card.id === view.cardId)
+  const activeCard = (view.name === "detail" || view.name === "editor") && view.cardId
+    ? (data.cards.find((card) => card.id === view.cardId) || (transientCard?.id === view.cardId ? transientCard : undefined) || data.trashCards.find((card) => card.id === view.cardId))
     : undefined;
 
   return (
@@ -516,6 +526,7 @@ export function App() {
             try {
               const tempTitle = card.title?.trim() || deriveAutoTitle(card.body);
               const saved = await data.saveCard({ ...card, title: tempTitle });
+              setTransientCard(saved);
               setView({ name: "detail", cardId: saved.id });
               if (data.settings.provider.enabled) {
                 try {
@@ -542,7 +553,8 @@ export function App() {
                     }
                     setActiveCollection(finalCard.collectionId);
                   }
-                  await data.saveCard(finalCard);
+                  const updatedSaved = await data.saveCard(finalCard);
+                  setTransientCard(updatedSaved);
                   await data.recordAiUsage(ai);
                   notify(folder && folder !== "生活集" ? `AI 分析完成，已归入「${folder}」` : "AI 分析完成，已提炼中文主题");
                 } catch (error) {
@@ -569,7 +581,10 @@ export function App() {
           onEdit={() => setView({ name: "editor", cardId: activeCard.id })}
           onOpenCard={(id) => setView({ name: "detail", cardId: id })}
           onPractice={(cardId: string, mode: PracticeMode, correct: boolean) => void recordPractice(cardId, mode, correct)}
-          onUpdateCard={async (next) => { await data.saveCard(next); }}
+          onUpdateCard={async (next) => {
+            const res = await data.saveCard(next);
+            setTransientCard(res);
+          }}
           onRegenerate={async () => {
             try {
               await data.saveCard({ ...activeCard, ai: { ...activeCard.ai, status: "processing" } });
@@ -583,7 +598,8 @@ export function App() {
               if (!finalCard.title.trim() || !hasChineseText(finalCard.title) || finalCard.title === deriveAutoTitle(finalCard.body)) {
                 finalCard.title = aiChineseTitle;
               }
-              await data.saveCard(finalCard);
+              const res = await data.saveCard(finalCard);
+              setTransientCard(res);
               await data.recordAiUsage(ai);
               notify("已重新生成中文主题与练习");
             } catch (error) { notify(error instanceof Error ? error.message : "AI 暂不可用"); }
@@ -1154,13 +1170,13 @@ const CardEditor = memo(function CardEditor(props: { card?: OioCard; collections
   const titleRef = useRef<HTMLInputElement>(null);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
   const countSpanRef = useRef<HTMLSpanElement>(null);
-  const submitBtnRef = useRef<HTMLButtonElement>(null);
   const [collectionId, setCollectionId] = useState(props.card?.collectionId ?? props.collections[0]?.id ?? "life");
   const [categoryId] = useState(props.card?.categoryId ?? "uncategorized");
   const [tasks, setTasks] = useState<AITask[]>(props.card?.tasks ?? []);
   const [attachments, setAttachments] = useState(props.card?.attachments ?? []);
   const [recording, setRecording] = useState(false);
   const [interimText, setInterimText] = useState("");
+  const [saving, setSaving] = useState(false);
   const recognitionRef = useRef<any>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
@@ -1175,24 +1191,36 @@ const CardEditor = memo(function CardEditor(props: { card?: OioCard; collections
   const toggleTask = (task: AITask) => setTasks((current) => current.includes(task) ? current.filter((item) => item !== task) : [...current, task]);
   
   const submit = async () => {
+    if (saving) return;
     const rawBody = bodyRef.current?.value ?? "";
     const trimmed = rawBody.trim();
-    if (!trimmed) return;
+    if (!trimmed) {
+      bodyRef.current?.focus();
+      return;
+    }
+    setSaving(true);
     const now = new Date().toISOString();
     const cleanTitle = (titleRef.current?.value ?? "").trim();
-    await props.onSave({
-      id: props.card?.id ?? makeId("card"),
-      collectionId,
-      categoryId,
-      title: cleanTitle,
-      body: trimmed,
-      tasks: tasks.length ? tasks : ["rewrite", "reply"],
-      attachments,
-      ai: props.card && props.card.body === trimmed ? props.card.ai : emptyAI,
-      createdAt: props.card?.createdAt ?? now,
-      updatedAt: now,
-      syncState: "pending",
-    });
+    const cardId = props.card?.id ?? makeId("card");
+    try {
+      await props.onSave({
+        id: cardId,
+        collectionId,
+        categoryId,
+        title: cleanTitle,
+        body: trimmed,
+        tasks: tasks.length ? tasks : ["rewrite", "reply"],
+        attachments,
+        ai: props.card && props.card.body === trimmed ? props.card.ai : emptyAI,
+        createdAt: props.card?.createdAt ?? now,
+        updatedAt: now,
+        syncState: "pending",
+      });
+    } catch (e) {
+      console.error("submit failed", e);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleFiles = async (files: FileList | null) => {
@@ -1287,7 +1315,7 @@ const CardEditor = memo(function CardEditor(props: { card?: OioCard; collections
       <TaskToggle checked={tasks.includes("reply")} label="目标语言回复" onClick={() => toggleTask("reply")} />
       <TaskToggle checked={tasks.includes("rewrite")} label="目标语言改写" onClick={() => toggleTask("rewrite")} />
     </div>
-    <footer className="editor-footer"><div className="media-actions"><button onClick={() => fileRef.current?.click()} aria-label="选择图片"><FileImage size={21} /></button><button onClick={() => cameraRef.current?.click()} aria-label="拍照"><Camera size={21} /></button><button className={recording ? "recording" : ""} onClick={toggleDictation} aria-label={recording ? "停止录音" : "语音输入"}><Microphone size={21} /></button><input ref={fileRef} hidden type="file" accept="image/*" multiple onChange={(event) => void handleFiles(event.target.files)} /><input ref={cameraRef} hidden type="file" accept="image/*" capture="environment" onChange={(event) => void handleFiles(event.target.files)} /></div><span ref={countSpanRef}>{props.card?.body?.length ?? 0}/5000</span><button ref={submitBtnRef} className="primary-button" onClick={() => void submit()}>完成</button></footer>
+    <footer className="editor-footer"><div className="media-actions"><button onClick={() => fileRef.current?.click()} aria-label="选择图片"><FileImage size={21} /></button><button onClick={() => cameraRef.current?.click()} aria-label="拍照"><Camera size={21} /></button><button className={recording ? "recording" : ""} onClick={toggleDictation} aria-label={recording ? "停止录音" : "语音输入"}><Microphone size={21} /></button><input ref={fileRef} hidden type="file" accept="image/*" multiple onChange={(event) => void handleFiles(event.target.files)} /><input ref={cameraRef} hidden type="file" accept="image/*" capture="environment" onChange={(event) => void handleFiles(event.target.files)} /></div><span ref={countSpanRef}>{props.card?.body?.length ?? 0}/5000</span><button type="button" className="primary-button" onClick={() => void submit()}>{saving ? "保存中…" : "完成"}</button></footer>
   </div>;
 });
 
