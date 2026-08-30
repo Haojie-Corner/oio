@@ -287,7 +287,19 @@ export async function syncCloudData(onProgress?: (message: string) => void): Pro
   if (categoriesResult.error) throw categoriesResult.error;
   if (attachmentsResult.error) throw attachmentsResult.error;
 
-  const remoteRows = cardsResult.data ?? [];
+  const rawRemoteRows = cardsResult.data ?? [];
+  
+  // 1.5 从 cards 表中提取 system:settings 系统行（避免混入用户卡片）
+  let systemSettingsRow: Record<string, unknown> | undefined;
+  const remoteRows: Record<string, unknown>[] = [];
+  for (const row of rawRemoteRows) {
+    if (row.id === "system:settings" || row.title === "__SYSTEM_USER_SETTINGS__") {
+      systemSettingsRow = row;
+    } else {
+      remoteRows.push(row);
+    }
+  }
+
   const remoteIdSet = new Set(remoteRows.map((r) => String(r.id)));
 
   // 2. 获取图片签名 URL
@@ -307,7 +319,7 @@ export async function syncCloudData(onProgress?: (message: string) => void): Pro
   }
 
   // 3. 构建云端卡片列表
-  const cloudCards: OioCard[] = remoteRows.map((row) => fromCloudCard(row, attachmentMap.get(row.id) ?? []));
+  const cloudCards: OioCard[] = remoteRows.map((row) => fromCloudCard(row, attachmentMap.get(String(row.id)) ?? []));
 
   // 4. 本地数据库强制与云端对齐（清除本地多余的未入云卡片与初始 demo）
   const localCards = await db.cards.toArray();
@@ -333,10 +345,19 @@ export async function syncCloudData(onProgress?: (message: string) => void): Pro
     if (cloudCategories.length) await db.categories.bulkPut(cloudCategories);
   });
 
-  // 5. 同步用户设置与 AI API 配置（跨设备双向同步）
+  // 5. 同步用户设置与 AI API 配置（双端秒级共用同一个 AI 配置）
   try {
-    const cloudSettings = await pullCloudSettings();
-    if (cloudSettings) {
+    let cloudSettings: UserSettings | null = null;
+    if (systemSettingsRow && typeof systemSettingsRow.body === "string") {
+      try {
+        cloudSettings = JSON.parse(systemSettingsRow.body) as UserSettings;
+      } catch {}
+    }
+    if (!cloudSettings) {
+      cloudSettings = await pullCloudSettings();
+    }
+
+    if (cloudSettings && cloudSettings.provider) {
       const local = (await db.settings.get("settings")) || getLocalFallbackSettings();
       const mergedSettings: UserSettings = {
         ...defaultSettings,
@@ -392,8 +413,28 @@ export async function saveCloudSettings(settings: UserSettings) {
   const supabase = getSupabase();
   const session = await getSession();
   if (!supabase || !session) return;
+  const userId = session.user.id;
 
-  // 1. 同步到 Supabase Auth 用户元数据（多端登录自动获取）
+  // 1. 保存到 cards 表系统配置行（利用现成的 Postgres RLS 与秒级 Realtime 广播）
+  try {
+    await supabase.from("cards").upsert({
+      id: "system:settings",
+      user_id: userId,
+      collection_id: "system",
+      category_id: "settings",
+      title: "__SYSTEM_USER_SETTINGS__",
+      body: JSON.stringify(settings),
+      tasks: [],
+      ai_result: settings.provider,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      deleted_at: null,
+    });
+  } catch (err) {
+    console.warn("Failed to save system:settings to cards table:", err);
+  }
+
+  // 2. 同步到 Supabase Auth 用户元数据（多端登录自动获取）
   try {
     await supabase.auth.updateUser({
       data: {
@@ -404,23 +445,8 @@ export async function saveCloudSettings(settings: UserSettings) {
     console.warn("Failed to update user_metadata:", err);
   }
 
-  // 2. 同时更新 user_settings 表
-  try {
-    await supabase.from("user_settings").upsert({
-      user_id: session.user.id,
-      display_name: settings.displayName,
-      interface_language: settings.interfaceLanguage,
-      target_language: settings.targetLanguage,
-      proficiency: settings.level,
-      settings_json: JSON.stringify(settings),
-      updated_at: new Date().toISOString(),
-    });
-  } catch {
-    // ignore
-  }
-
   // 3. 广播给其他设备实时同步
-  await broadcastMutation("settings", "user_settings");
+  await broadcastMutation("settings", "system:settings");
 }
 
 /** 从云端拉取设置（包括 API Key、模型等完整配置） */
@@ -428,29 +454,34 @@ export async function pullCloudSettings(): Promise<UserSettings | null> {
   const supabase = getSupabase();
   const session = await getSession();
   if (!supabase || !session) return null;
+  const userId = session.user.id;
 
-  // 1. 优先读取 session user_metadata 中的 user_settings
-  const metaSettings = session.user.user_metadata?.user_settings as UserSettings | undefined;
-  if (metaSettings && metaSettings.provider) {
-    setLocalFallbackSettings(metaSettings);
-    return metaSettings;
-  }
-
-  // 2. 备用读取 user_settings 表
+  // 1. 优先从 cards 表查询 system:settings
   try {
     const { data } = await supabase
-      .from("user_settings")
+      .from("cards")
       .select("*")
-      .eq("user_id", session.user.id)
-      .single();
-    if (data?.settings_json) {
-      const parsed = JSON.parse(data.settings_json) as UserSettings;
-      setLocalFallbackSettings(parsed);
-      return parsed;
+      .eq("id", "system:settings")
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (data?.body) {
+      const parsed = JSON.parse(data.body) as UserSettings;
+      if (parsed?.provider) {
+        setLocalFallbackSettings(parsed);
+        return parsed;
+      }
     }
-  } catch {
-    // ignore
-  }
+  } catch {}
+
+  // 2. 从 Supabase auth.getUser() 查询最新元数据
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    const meta = user?.user_metadata?.user_settings as UserSettings | undefined;
+    if (meta?.provider) {
+      setLocalFallbackSettings(meta);
+      return meta;
+    }
+  } catch {}
 
   return null;
 }

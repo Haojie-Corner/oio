@@ -1428,6 +1428,11 @@ function SettingsPanel(props: {
   const [draft, setDraft] = useState(props.settings);
   const [busy, setBusy] = useState(false);
   const [pendingCount, setPendingCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    setDraft(props.settings);
+  }, [props.settings]);
+
   useEffect(() => { void db.syncQueue.count().then(setPendingCount); }, [props.settings.lastSyncedAt]);
   const total = draft.monthlyInputTokens + draft.monthlyOutputTokens;
   const updateProvider = (patch: Partial<UserSettings["provider"]>) => setDraft((value) => ({ ...value, provider: { ...value.provider, ...patch } }));
