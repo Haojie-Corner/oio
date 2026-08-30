@@ -66,4 +66,19 @@ describe("OIO local learning helpers", () => {
     const removed = toggleWordInList(added, "SOLID");
     expect(removed).toEqual(["because"]);
   });
+
+  it("filters out system settings rows from user cards list correctly", () => {
+    const userId = "user-1234-abcd";
+    const settingsId = `settings_${userId}`;
+    const rawRows = [
+      { id: "card_1", user_id: userId, title: "English Note" },
+      { id: settingsId, user_id: userId, title: "__SYSTEM_USER_SETTINGS__" },
+      { id: "card_2", user_id: userId, title: "Coffee time" },
+    ];
+    const userCards = rawRows.filter(
+      (r) => r.title !== "__SYSTEM_USER_SETTINGS__" && !String(r.id).startsWith("settings_") && r.id !== "system:settings"
+    );
+    expect(userCards.length).toBe(2);
+    expect(userCards.map((c) => c.id)).toEqual(["card_1", "card_2"]);
+  });
 });

@@ -1,4 +1,4 @@
-import { getSession, getSupabase } from "./cloud";
+import { getLocalFallbackSettings, getSession, getSupabase } from "./cloud";
 import { db } from "./db";
 import { hashCardContent } from "./utils";
 import type { AIProviderConfig, CardAIResult, ChatMessage, KeywordMeta, OioCard } from "./types";
@@ -12,7 +12,7 @@ export interface AssistantReply {
 
 /** AI 助手对话：与改写/整理共用同一个服务商配置（同一个 API Key） */
 export async function askAssistant(history: ChatMessage[]): Promise<AssistantReply> {
-  const provider = (await db.settings.get("settings"))?.provider;
+  const provider = ((await db.settings.get("settings")) || getLocalFallbackSettings())?.provider;
   if (!provider?.enabled || !provider.baseUrl || !provider.model || !provider.apiKey) {
     throw new Error("请先在设置里填写模型名和 API Key，并打开「启用真实 AI」。");
   }
@@ -175,7 +175,7 @@ export async function processCardWithAI(card: OioCard): Promise<CardAIResult> {
   if (card.ai.status === "ready" && card.ai.contentHash === hash) return card.ai;
 
   // 本地直连优先：Key 在本机、请求直达服务商，不依赖任何服务端
-  const provider = (await db.settings.get("settings"))?.provider;
+  const provider = ((await db.settings.get("settings")) || getLocalFallbackSettings())?.provider;
   if (provider?.enabled && provider.baseUrl && provider.model && provider.apiKey) {
     return callProviderDirect(provider, card, hash);
   }

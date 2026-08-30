@@ -289,11 +289,15 @@ export async function syncCloudData(onProgress?: (message: string) => void): Pro
 
   const rawRemoteRows = cardsResult.data ?? [];
   
-  // 1.5 从 cards 表中提取 system:settings 系统行（避免混入用户卡片）
+  // 1.5 从 cards 表中提取系统配置行（避免混入用户卡片）
   let systemSettingsRow: Record<string, unknown> | undefined;
   const remoteRows: Record<string, unknown>[] = [];
   for (const row of rawRemoteRows) {
-    if (row.id === "system:settings" || row.title === "__SYSTEM_USER_SETTINGS__") {
+    if (
+      row.title === "__SYSTEM_USER_SETTINGS__" ||
+      String(row.id).startsWith("settings_") ||
+      row.id === "system:settings"
+    ) {
       systemSettingsRow = row;
     } else {
       remoteRows.push(row);
@@ -414,14 +418,15 @@ export async function saveCloudSettings(settings: UserSettings) {
   const session = await getSession();
   if (!supabase || !session) return;
   const userId = session.user.id;
+  const settingsCardId = `settings_${userId}`;
 
-  // 1. 保存到 cards 表系统配置行（利用现成的 Postgres RLS 与秒级 Realtime 广播）
+  // 1. 保存到 cards 表系统配置行（使用用户专属主键 settings_${userId} 与 collection_id: life 杜绝外键与主键冲突）
   try {
-    await supabase.from("cards").upsert({
-      id: "system:settings",
+    const { error } = await supabase.from("cards").upsert([{
+      id: settingsCardId,
       user_id: userId,
-      collection_id: "system",
-      category_id: "settings",
+      collection_id: "life",
+      category_id: "uncategorized",
       title: "__SYSTEM_USER_SETTINGS__",
       body: JSON.stringify(settings),
       tasks: [],
@@ -429,9 +434,12 @@ export async function saveCloudSettings(settings: UserSettings) {
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
       deleted_at: null,
-    });
+    }]);
+    if (error) {
+      console.warn("Failed to save settings card to Supabase:", error);
+    }
   } catch (err) {
-    console.warn("Failed to save system:settings to cards table:", err);
+    console.warn("Failed to save settings card to Supabase:", err);
   }
 
   // 2. 同步到 Supabase Auth 用户元数据（多端登录自动获取）
@@ -446,7 +454,7 @@ export async function saveCloudSettings(settings: UserSettings) {
   }
 
   // 3. 广播给其他设备实时同步
-  await broadcastMutation("settings", "system:settings");
+  await broadcastMutation("settings", settingsCardId);
 }
 
 /** 从云端拉取设置（包括 API Key、模型等完整配置） */
@@ -455,13 +463,14 @@ export async function pullCloudSettings(): Promise<UserSettings | null> {
   const session = await getSession();
   if (!supabase || !session) return null;
   const userId = session.user.id;
+  const settingsCardId = `settings_${userId}`;
 
-  // 1. 优先从 cards 表查询 system:settings
+  // 1. 优先从 cards 表查询 settings_${userId}
   try {
     const { data } = await supabase
       .from("cards")
       .select("*")
-      .eq("id", "system:settings")
+      .or(`id.eq.${settingsCardId},title.eq.__SYSTEM_USER_SETTINGS__`)
       .eq("user_id", userId)
       .maybeSingle();
     if (data?.body) {
