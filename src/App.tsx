@@ -49,6 +49,7 @@ import {
   cloudConfigured,
   deleteCardOnCloud,
   emptyTrashOnCloud,
+  getLocalFallbackSettings,
   getSession,
   purgeCardOnCloud,
   pushCardToCloud,
@@ -56,6 +57,7 @@ import {
   restoreCardOnCloud,
   saveCloudSettings,
   saveProviderSecurely,
+  setLocalFallbackSettings,
   signIn,
   signOut,
   signUp,
@@ -122,11 +124,20 @@ function useOioData() {
   const [ready, setReady] = useState(false);
 
   const reload = useCallback(async () => {
-    const [nextCards, nextCollections, nextCategories, storedSettings, practiceRecords] = await Promise.all([
+    let storedSettings = await db.settings.get("settings");
+    if (!storedSettings) {
+      const fallback = getLocalFallbackSettings();
+      if (fallback) {
+        storedSettings = fallback;
+        await db.settings.put(fallback);
+      }
+    } else {
+      setLocalFallbackSettings(storedSettings);
+    }
+    const [nextCards, nextCollections, nextCategories, practiceRecords] = await Promise.all([
       db.cards.toArray(),
       db.collections.toArray(),
       db.categories.toArray(),
-      db.settings.get("settings"),
       db.practice.toArray(),
     ]);
     setCards(nextCards.filter((card) => !card.deletedAt).sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
@@ -188,8 +199,10 @@ function useOioData() {
 
   const saveSettings = useCallback(async (next: UserSettings) => {
     await db.settings.put(next);
+    setLocalFallbackSettings(next);
     await queueSync("settings", "settings", "upsert");
     setSettings(next);
+    void saveCloudSettings(next).catch(() => undefined);
   }, []);
 
   const recordAiUsage = useCallback(async (usage: { inputTokens: number; outputTokens: number }) => {
@@ -1444,7 +1457,7 @@ function SettingsPanel(props: {
       <SettingsGroup title="AI 模型设置">
         <div className="form-grid"><label>服务商<input value={draft.provider.providerName} onChange={(event) => updateProvider({ providerName: event.target.value })} /></label><label>Base URL<input list="oio-provider-urls" value={draft.provider.baseUrl} onChange={(event) => updateProvider({ baseUrl: event.target.value })} /><datalist id="oio-provider-urls"><option value="https://api.deepseek.com/v1">DeepSeek</option><option value="https://api.openai.com/v1">OpenAI</option><option value="https://api.moonshot.cn/v1">Kimi</option><option value="https://open.bigmodel.cn/api/paas/v4">智谱 GLM</option><option value="https://dashscope.aliyuncs.com/compatible-mode/v1">通义千问</option></datalist></label><label>模型名<input value={draft.provider.model} onChange={(event) => updateProvider({ model: event.target.value })} placeholder="例如 deepseek-chat、gpt-4o-mini" /></label><label>API Key<input type="password" value={draft.provider.apiKey ?? ""} onChange={(event) => updateProvider({ apiKey: event.target.value })} placeholder={draft.provider.apiKey ? "已保存在本机，留空不修改" : "粘贴你的 API Key"} /></label></div>
         <label className="switch-row"><span><strong>启用真实 AI</strong><small>打开后新建卡片会自动改写、回复和纠错</small></span><input type="checkbox" checked={draft.provider.enabled} onChange={(event) => updateProvider({ enabled: event.target.checked })} /></label>
-        <p className="settings-note">AI 请求由浏览器直接发给你填写的服务商；API Key 只保存在这台设备的浏览器里，不会上传。</p>
+        <p className="settings-note">AI 设置与 API Key 会在本地持久化双重备份，并自动同步到你的云端账号。电脑端配置后手机端自动生效，网页更新也不会丢失。</p>
       </SettingsGroup>
       <SettingsGroup title="语言"><div className="form-grid"><label>界面语言<select value={draft.interfaceLanguage} onChange={(event) => setDraft((value) => ({ ...value, interfaceLanguage: event.target.value as UserSettings["interfaceLanguage"] }))}><option value="zh-CN">简体中文</option><option value="zh-TW">繁體中文</option><option value="en">English</option><option value="ja">日本語</option></select></label><label>目标语言<select value={draft.targetLanguage} onChange={(event) => setDraft((value) => ({ ...value, targetLanguage: event.target.value as UserSettings["targetLanguage"] }))}><option>English</option><option>Japanese</option></select></label><label>熟练度<select value={draft.level} onChange={(event) => setDraft((value) => ({ ...value, level: event.target.value as UserSettings["level"] }))}><option value="beginner">入门</option><option value="intermediate">进阶</option><option value="advanced">熟练</option></select></label></div></SettingsGroup>
       <SettingsGroup title="数据与同步">

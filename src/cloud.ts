@@ -1,5 +1,6 @@
 import { createClient, type RealtimeChannel, type Session, type SupabaseClient } from "@supabase/supabase-js";
 import { db } from "./db";
+import { defaultSettings } from "./demo";
 import { emptyAI } from "./types";
 import type { CardAttachment, OioCard, OioCategory, OioCollection, UserSettings } from "./types";
 
@@ -332,26 +333,126 @@ export async function syncCloudData(onProgress?: (message: string) => void): Pro
     if (cloudCategories.length) await db.categories.bulkPut(cloudCategories);
   });
 
-  await db.syncQueue.clear();
+  // 5. 同步用户设置与 AI API 配置（跨设备双向同步）
+  try {
+    const cloudSettings = await pullCloudSettings();
+    if (cloudSettings) {
+      const local = (await db.settings.get("settings")) || getLocalFallbackSettings();
+      const mergedSettings: UserSettings = {
+        ...defaultSettings,
+        ...local,
+        ...cloudSettings,
+        provider: {
+          ...(local?.provider ?? defaultSettings.provider),
+          ...(cloudSettings.provider ?? {}),
+          apiKey: cloudSettings.provider?.apiKey || local?.provider?.apiKey || "",
+          enabled: cloudSettings.provider?.enabled ?? local?.provider?.enabled ?? false,
+          model: cloudSettings.provider?.model || local?.provider?.model || "deepseek-chat",
+          baseUrl: cloudSettings.provider?.baseUrl || local?.provider?.baseUrl || "https://api.deepseek.com/v1",
+        },
+        id: "settings",
+      };
+      await db.settings.put(mergedSettings);
+      setLocalFallbackSettings(mergedSettings);
+    }
+  } catch (err) {
+    console.warn("Failed to sync cloud settings in syncCloudData:", err);
+  }
 
   const activeCount = cloudCards.filter((c) => !c.deletedAt).length;
   const trashCount = cloudCards.filter((c) => !!c.deletedAt).length;
   return { merged: cloudCards, activeCount, trashCount };
 }
 
+const SETTINGS_KEY = "oio_user_settings";
+
+/** 读取本地持久化设置（防止页面更新/刷新时丢失 API Key） */
+export function getLocalFallbackSettings(): UserSettings | null {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as UserSettings;
+  } catch {
+    return null;
+  }
+}
+
+/** 写入本地持久化设置 */
+export function setLocalFallbackSettings(settings: UserSettings) {
+  try {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  } catch {
+    // ignore
+  }
+}
+
+/** 将设置（包括 API 配置）同步到 Supabase 云端与本地兜底 */
 export async function saveCloudSettings(settings: UserSettings) {
+  setLocalFallbackSettings(settings);
   const supabase = getSupabase();
   const session = await getSession();
-  if (!supabase || !session) throw new Error("请先登录后再同步设置。");
-  const { error } = await supabase.from("user_settings").upsert({
-    user_id: session.user.id,
-    display_name: settings.displayName,
-    interface_language: settings.interfaceLanguage,
-    target_language: settings.targetLanguage,
-    proficiency: settings.level,
-    updated_at: new Date().toISOString(),
-  });
-  if (error) throw error;
+  if (!supabase || !session) return;
+
+  // 1. 同步到 Supabase Auth 用户元数据（多端登录自动获取）
+  try {
+    await supabase.auth.updateUser({
+      data: {
+        user_settings: settings,
+      },
+    });
+  } catch (err) {
+    console.warn("Failed to update user_metadata:", err);
+  }
+
+  // 2. 同时更新 user_settings 表
+  try {
+    await supabase.from("user_settings").upsert({
+      user_id: session.user.id,
+      display_name: settings.displayName,
+      interface_language: settings.interfaceLanguage,
+      target_language: settings.targetLanguage,
+      proficiency: settings.level,
+      settings_json: JSON.stringify(settings),
+      updated_at: new Date().toISOString(),
+    });
+  } catch {
+    // ignore
+  }
+
+  // 3. 广播给其他设备实时同步
+  await broadcastMutation("settings", "user_settings");
+}
+
+/** 从云端拉取设置（包括 API Key、模型等完整配置） */
+export async function pullCloudSettings(): Promise<UserSettings | null> {
+  const supabase = getSupabase();
+  const session = await getSession();
+  if (!supabase || !session) return null;
+
+  // 1. 优先读取 session user_metadata 中的 user_settings
+  const metaSettings = session.user.user_metadata?.user_settings as UserSettings | undefined;
+  if (metaSettings && metaSettings.provider) {
+    setLocalFallbackSettings(metaSettings);
+    return metaSettings;
+  }
+
+  // 2. 备用读取 user_settings 表
+  try {
+    const { data } = await supabase
+      .from("user_settings")
+      .select("*")
+      .eq("user_id", session.user.id)
+      .single();
+    if (data?.settings_json) {
+      const parsed = JSON.parse(data.settings_json) as UserSettings;
+      setLocalFallbackSettings(parsed);
+      return parsed;
+    }
+  } catch {
+    // ignore
+  }
+
+  return null;
 }
 
 export async function saveProviderSecurely(provider: UserSettings["provider"]) {

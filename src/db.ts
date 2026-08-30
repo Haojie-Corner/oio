@@ -37,6 +37,17 @@ export const db = new OioDatabase();
 
 export async function seedDatabase() {
   const count = await db.cards.count();
+  let initialSettings = defaultSettings;
+  try {
+    const cached = localStorage.getItem("oio_user_settings");
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      if (parsed && typeof parsed === "object") {
+        initialSettings = { ...defaultSettings, ...parsed, id: "settings" };
+      }
+    }
+  } catch {}
+
   if (count === 0) {
     // 演示卡片用随机 id，并标记 isDemo: true（避免登录后误上传到云端）
     const seededCards = demoCards.map((card) => ({ ...card, id: makeId("card"), isDemo: true }));
@@ -44,10 +55,15 @@ export async function seedDatabase() {
       await db.cards.bulkPut(seededCards);
       await db.collections.bulkPut(demoCollections);
       await db.categories.bulkPut(demoCategories);
-      await db.settings.put(defaultSettings);
+      await db.settings.put(initialSettings);
     });
   }
-  if (!(await db.settings.get("settings"))) await db.settings.put(defaultSettings);
+  const current = await db.settings.get("settings");
+  if (!current) {
+    await db.settings.put(initialSettings);
+  } else if (!current.provider.apiKey && initialSettings.provider?.apiKey) {
+    await db.settings.put(initialSettings);
+  }
 }
 
 export async function queueSync(entity: SyncQueueItem["entity"], entityId: string, action: SyncQueueItem["action"]) {
