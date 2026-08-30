@@ -1143,8 +1143,8 @@ function ActivityGrid({ cards, practiceDates }: { cards: OioCard[]; practiceDate
 const CardEditor = memo(function CardEditor(props: { card?: OioCard; collections: OioCollection[]; categories: OioCategory[]; onCancel: () => void; onSave: (card: OioCard) => Promise<void> }) {
   const titleRef = useRef<HTMLInputElement>(null);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
-  const [hasContent, setHasContent] = useState(Boolean(props.card?.body?.trim()));
-  const [charCount, setCharCount] = useState(props.card?.body?.length ?? 0);
+  const countSpanRef = useRef<HTMLSpanElement>(null);
+  const submitBtnRef = useRef<HTMLButtonElement>(null);
   const [collectionId, setCollectionId] = useState(props.card?.collectionId ?? props.collections[0]?.id ?? "life");
   const [categoryId] = useState(props.card?.categoryId ?? "uncategorized");
   const [tasks, setTasks] = useState<AITask[]>(props.card?.tasks ?? []);
@@ -1157,8 +1157,12 @@ const CardEditor = memo(function CardEditor(props: { card?: OioCard; collections
 
   const syncBodyStats = () => {
     const val = bodyRef.current?.value ?? "";
-    setCharCount(val.length);
-    setHasContent(Boolean(val.trim()));
+    if (countSpanRef.current) {
+      countSpanRef.current.textContent = `${val.length}/5000`;
+    }
+    if (submitBtnRef.current) {
+      submitBtnRef.current.disabled = !val.trim();
+    }
   };
 
   const toggleTask = (task: AITask) => setTasks((current) => current.includes(task) ? current.filter((item) => item !== task) : [...current, task]);
@@ -1276,7 +1280,7 @@ const CardEditor = memo(function CardEditor(props: { card?: OioCard; collections
       <TaskToggle checked={tasks.includes("reply")} label="目标语言回复" onClick={() => toggleTask("reply")} />
       <TaskToggle checked={tasks.includes("rewrite")} label="目标语言改写" onClick={() => toggleTask("rewrite")} />
     </div>
-    <footer className="editor-footer"><div className="media-actions"><button onClick={() => fileRef.current?.click()} aria-label="选择图片"><FileImage size={21} /></button><button onClick={() => cameraRef.current?.click()} aria-label="拍照"><Camera size={21} /></button><button className={recording ? "recording" : ""} onClick={toggleDictation} aria-label={recording ? "停止录音" : "语音输入"}><Microphone size={21} /></button><input ref={fileRef} hidden type="file" accept="image/*" multiple onChange={(event) => void handleFiles(event.target.files)} /><input ref={cameraRef} hidden type="file" accept="image/*" capture="environment" onChange={(event) => void handleFiles(event.target.files)} /></div><span>{charCount}/5000</span><button className="primary-button" disabled={!hasContent} onClick={() => void submit()}>完成</button></footer>
+    <footer className="editor-footer"><div className="media-actions"><button onClick={() => fileRef.current?.click()} aria-label="选择图片"><FileImage size={21} /></button><button onClick={() => cameraRef.current?.click()} aria-label="拍照"><Camera size={21} /></button><button className={recording ? "recording" : ""} onClick={toggleDictation} aria-label={recording ? "停止录音" : "语音输入"}><Microphone size={21} /></button><input ref={fileRef} hidden type="file" accept="image/*" multiple onChange={(event) => void handleFiles(event.target.files)} /><input ref={cameraRef} hidden type="file" accept="image/*" capture="environment" onChange={(event) => void handleFiles(event.target.files)} /></div><span ref={countSpanRef}>{props.card?.body?.length ?? 0}/5000</span><button ref={submitBtnRef} className="primary-button" disabled={!props.card?.body?.trim()} onClick={() => void submit()}>完成</button></footer>
   </div>;
 });
 
