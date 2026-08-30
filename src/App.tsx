@@ -1577,54 +1577,318 @@ function ImporterScreen(props: { defaultCollection: string; onBack: () => void; 
   </div>;
 }
 
-function ReviewScreen(props: { cards: OioCard[]; onBack: () => void; onPractice?: (cardId: string, mode: PracticeMode, correct: boolean) => void }) {
-  const shuffle = (cards: OioCard[]) => [...cards].sort(() => Math.random() - 0.5);
-  const [pool, setPool] = useState(() => shuffle(props.cards));
-  const [index, setIndex] = useState(0);
-  const [revealed, setRevealed] = useState(false);
-  const [stats, setStats] = useState({ known: 0, unknown: 0 });
+interface GameQuestion {
+  id: string;
+  cardId: string;
+  fullSentence: string;
+  prefix: string;
+  blank: string;
+  suffix: string;
+  options: string[];
+  explanation: string;
+  chineseHint: string;
+}
 
-  const restart = () => { setPool(shuffle(props.cards)); setIndex(0); setRevealed(false); setStats({ known: 0, unknown: 0 }); };
-  const answer = (known: boolean) => {
-    props.onPractice?.(pool[index].id, "reveal", known);
-    setStats((current) => ({ known: current.known + (known ? 1 : 0), unknown: current.unknown + (known ? 0 : 1) }));
-    setIndex((current) => current + 1);
-    setRevealed(false);
+function ReviewScreen(props: {
+  cards: OioCard[];
+  onBack: () => void;
+  onPractice?: (cardId: string, mode: PracticeMode, correct: boolean) => void;
+}) {
+  // 1. 根据科学记忆原理：从用户卡片提取所有挖空词块与语境
+  const questions: GameQuestion[] = useMemo(() => {
+    const list: GameQuestion[] = [];
+    const allKeywords = new Set<string>();
+
+    for (const card of props.cards) {
+      for (const kw of card.ai.practiceKeywords || []) {
+        if (kw.trim()) allKeywords.add(kw.trim());
+      }
+    }
+
+    const keywordPool = Array.from(allKeywords);
+    // 基础语境干扰词库（确保即使卡片少也有充足候选项）
+    const fallbackDistractors = [
+      "take it easy", "make sense", "figure out", "catch up", "look forward to",
+      "give up", "hang out", "break through", "get used to", "keep in touch",
+      "calm down", "step by step", "by the way", "on the other hand", "come across"
+    ];
+
+    for (const card of props.cards) {
+      const blanks = card.ai.practiceKeywords || [];
+      if (!blanks.length) continue;
+
+      const sentences = card.ai.rewrittenSentences.length ? card.ai.rewrittenSentences : (card.body ? [card.body] : []);
+      const chineseHint = hasChineseText(card.body) ? card.body : (card.ai.chineseMeaning || card.title || "");
+
+      for (const blank of blanks) {
+        if (!blank.trim()) continue;
+        // 找到包含该词的句子
+        const targetSentence = sentences.find((s) => s.toLowerCase().includes(blank.toLowerCase())) || sentences[0];
+        if (!targetSentence) continue;
+
+        const regex = new RegExp(`(${blank.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "i");
+        const parts = targetSentence.split(regex);
+        let prefix = "";
+        let matchedBlank = blank;
+        let suffix = "";
+
+        if (parts.length >= 3) {
+          prefix = parts[0];
+          matchedBlank = parts[1];
+          suffix = parts.slice(2).join("");
+        } else {
+          prefix = "";
+          matchedBlank = blank;
+          suffix = targetSentence.replace(regex, "");
+        }
+
+        // 生成 3 个强干扰项（优先从用户其他卡片抽取，避免孤立背词）
+        const otherKeywords = keywordPool.filter((k) => k.toLowerCase() !== blank.toLowerCase());
+        const distractors: string[] = [];
+        const shuffledOthers = [...otherKeywords].sort(() => 0.5 - Math.random());
+        for (const item of shuffledOthers) {
+          if (distractors.length < 3) distractors.push(item);
+        }
+        const shuffledFallback = [...fallbackDistractors].sort(() => 0.5 - Math.random());
+        for (const fb of shuffledFallback) {
+          if (distractors.length < 3 && fb.toLowerCase() !== blank.toLowerCase() && !distractors.includes(fb)) {
+            distractors.push(fb);
+          }
+        }
+
+        const options = [...distractors, matchedBlank].sort(() => 0.5 - Math.random());
+        const meta = card.ai.keywordMeta?.find((m) => m.phrase.toLowerCase() === blank.toLowerCase());
+        const explanation = meta ? `${meta.phrase}：${meta.explanation}` : `地道表达「${matchedBlank}」在语境中的正确搭配。`;
+
+        list.push({
+          id: `${card.id}-${blank}`,
+          cardId: card.id,
+          fullSentence: targetSentence,
+          prefix,
+          blank: matchedBlank,
+          suffix,
+          options,
+          explanation,
+          chineseHint,
+        });
+      }
+    }
+
+    return list.sort(() => 0.5 - Math.random());
+  }, [props.cards]);
+
+  const [index, setIndex] = useState(0);
+  const [selectedOption, setSelectedOption] = useState<string | null>(null);
+  const [streak, setStreak] = useState(0);
+  const [maxStreak, setMaxStreak] = useState(0);
+  const [correctCount, setCorrectCount] = useState(0);
+  const [finished, setFinished] = useState(false);
+
+  const currentQ = questions[index];
+  const total = questions.length;
+
+  // 空状态（对标截图设计 100% 还原）
+  if (!total) {
+    return (
+      <div className="full-screen game-screen">
+        <header className="game-header">
+          <button className="icon-button" onClick={props.onBack} aria-label="关闭">
+            <X size={22} />
+          </button>
+          <h1>记忆游戏</h1>
+          <span />
+        </header>
+
+        <div className="game-empty-wrap">
+          <div className="game-empty-icon">
+            <Sparkle size={36} weight="fill" />
+          </div>
+          <h2>还没有可以开始的挖空</h2>
+          <p>去 Card 里长按想记住的词或短语，选择「挖空」，就能在这里开始记忆游戏。</p>
+          <button className="game-empty-btn" onClick={props.onBack}>
+            回到 Card <ArrowRight size={16} weight="bold" />
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const handleSelect = (opt: string) => {
+    if (selectedOption !== null || !currentQ) return;
+    setSelectedOption(opt);
+    const isCorrect = opt.toLowerCase() === currentQ.blank.toLowerCase();
+    props.onPractice?.(currentQ.cardId, "cloze", isCorrect);
+
+    if (isCorrect) {
+      speak(currentQ.fullSentence);
+      const nextStreak = streak + 1;
+      setStreak(nextStreak);
+      setMaxStreak((m) => Math.max(m, nextStreak));
+      setCorrectCount((c) => c + 1);
+    } else {
+      setStreak(0);
+    }
   };
 
-  if (!pool.length) return <div className="full-screen review-screen">
-    <header className="screen-header"><button className="icon-button" onClick={props.onBack} aria-label="返回"><ArrowLeft size={22} /></button><h1>回忆</h1><span /></header>
-    <div className="assistant-notice"><Sparkle size={34} /><p>还没有可回忆的卡片，先去记录一句今天想说的话吧。</p></div>
-  </div>;
+  const handleNext = () => {
+    if (index < total - 1) {
+      setIndex((i) => i + 1);
+      setSelectedOption(null);
+    } else {
+      setFinished(true);
+    }
+  };
 
-  if (index >= pool.length) return <div className="full-screen review-screen">
-    <header className="screen-header"><button className="icon-button" onClick={props.onBack} aria-label="返回"><ArrowLeft size={22} /></button><h1>回忆完成</h1><span /></header>
-    <div className="review-summary">
-      <CheckCircle size={40} weight="fill" />
-      <h2>本轮回忆了 {pool.length} 张卡片</h2>
-      <p>想起来了 {stats.known} 张 · 再看看 {stats.unknown} 张</p>
-      <button className="primary-button" onClick={restart}>再来一轮</button>
-      <button className="text-button" onClick={props.onBack}>回到首页</button>
-    </div>
-  </div>;
+  const handleRestart = () => {
+    setIndex(0);
+    setSelectedOption(null);
+    setStreak(0);
+    setCorrectCount(0);
+    setFinished(false);
+  };
 
-  const card = pool[index];
-  const sentences = card.ai.rewrittenSentences.length ? card.ai.rewrittenSentences : [card.body];
-  const recall = recallPromptOf(card);
-  return <div className="full-screen review-screen">
-    <header className="screen-header"><button className="icon-button" onClick={props.onBack} aria-label="返回"><ArrowLeft size={22} /></button><h1>回忆</h1><span className="review-progress">{index + 1}/{pool.length}</span></header>
-    <div className="review-card">
-      <p className="review-prompt">{recall.kind === "chinese" ? "还记得这句要怎么表达吗？" : "看提示，回忆完整表达"}</p>
-      <h2>{recall.prompt}</h2>
-      {recall.kind === "hint" ? <p className="practice-hint">这张卡的原文是英文，凭提示先自己说一遍。</p> : null}
-      {revealed ? <>
-        <div className="review-answer">{sentences.join(" ")}</div>
-        <button className="text-button" onClick={() => speak(sentences.join(" "))}><SpeakerHigh size={15} />朗读</button>
-      </> : <button className="primary-button" onClick={() => setRevealed(true)}><Eye size={16} />揭晓答案</button>}
+  // 结算页
+  if (finished) {
+    const accuracy = Math.round((correctCount / total) * 100);
+    return (
+      <div className="full-screen game-screen">
+        <header className="game-header">
+          <button className="icon-button" onClick={props.onBack} aria-label="关闭">
+            <X size={22} />
+          </button>
+          <h1>游戏结算</h1>
+          <span />
+        </header>
+
+        <div className="game-summary-wrap">
+          <div className="game-summary-badge">
+            {accuracy >= 80 ? "🏆" : accuracy >= 60 ? "🌟" : "💪"}
+          </div>
+          <h2>本次记忆挑战完成！</h2>
+          <p>通过语境提取练习，强化了在大脑中建立长期神经回路的效果。</p>
+
+          <div className="game-summary-stats">
+            <div className="game-stat-box">
+              <strong>{accuracy}%</strong>
+              <span>正确率</span>
+            </div>
+            <div className="game-stat-box">
+              <strong>🔥 {maxStreak}</strong>
+              <span>最高连对</span>
+            </div>
+            <div className="game-stat-box">
+              <strong>{total}</strong>
+              <span>挑战题数</span>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, width: "100%" }}>
+            <button className="primary-button" style={{ width: "100%", height: 46, borderRadius: 23 }} onClick={handleRestart}>
+              再来一局
+            </button>
+            <button className="text-button" onClick={props.onBack}>
+              回到 Card
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const isAnswered = selectedOption !== null;
+  const isCorrect = selectedOption?.toLowerCase() === currentQ.blank.toLowerCase();
+
+  return (
+    <div className="full-screen game-screen">
+      <header className="game-header">
+        <button className="icon-button" onClick={props.onBack} aria-label="退出">
+          <X size={22} />
+        </button>
+        <h1>记忆游戏</h1>
+        {streak > 1 ? (
+          <span className="game-streak">🔥 {streak} 连对</span>
+        ) : (
+          <span style={{ fontSize: "14px", color: "#888", fontWeight: 600, justifySelf: "end" }}>
+            {index + 1} / {total}
+          </span>
+        )}
+      </header>
+
+      {/* 顶部科学进度条 */}
+      <div className="game-progress-line">
+        <div className="game-progress-fill" style={{ width: `${((index + 1) / total) * 100}%` }} />
+      </div>
+
+      <main className="game-main">
+        <article className="game-card">
+          <span className="game-prompt-tag">语境挖空 · 主动提取</span>
+
+          <div className="game-sentence">
+            {currentQ.prefix}
+            <span
+              className={`game-blank-slot ${
+                !isAnswered
+                  ? "unfilled"
+                  : isCorrect
+                  ? "correct"
+                  : "wrong"
+              }`}
+            >
+              {isAnswered ? currentQ.blank : " ? "}
+            </span>
+            {currentQ.suffix}
+          </div>
+
+          {currentQ.chineseHint ? (
+            <div className="game-meaning">
+              💡 语境线索：{currentQ.chineseHint}
+            </div>
+          ) : null}
+
+          {/* 4 选 1 候选词块 */}
+          <div className="game-options-grid">
+            {currentQ.options.map((opt) => {
+              let cls = "game-option-btn";
+              if (isAnswered) {
+                if (opt.toLowerCase() === currentQ.blank.toLowerCase()) {
+                  cls += isCorrect ? " selected-correct" : " missed-correct";
+                } else if (opt === selectedOption && !isCorrect) {
+                  cls += " selected-wrong";
+                }
+              }
+              return (
+                <button
+                  key={opt}
+                  className={cls}
+                  disabled={isAnswered}
+                  onClick={() => handleSelect(opt)}
+                >
+                  {opt}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* 即时科学解析反馈 */}
+          {isAnswered ? (
+            <div className={`game-feedback-box ${isCorrect ? "" : "wrong"}`}>
+              <div className="game-feedback-title">
+                {isCorrect ? <CheckCircle size={18} weight="fill" /> : <WarningCircle size={18} weight="fill" />}
+                {isCorrect ? "回答正确！声学印记已激活" : `正确答案：${currentQ.blank}`}
+              </div>
+              <p className="game-feedback-desc">{currentQ.explanation}</p>
+            </div>
+          ) : null}
+
+          {isAnswered ? (
+            <div className="game-action-row">
+              <button className="primary-button" onClick={handleNext}>
+                {index < total - 1 ? "下一题" : "查看结算"} <ArrowRight size={16} />
+              </button>
+            </div>
+          ) : null}
+        </article>
+      </main>
     </div>
-    {revealed ? <div className="review-actions">
-      <button onClick={() => answer(false)}><WarningCircle size={17} />再看看</button>
-      <button className="primary-button" onClick={() => answer(true)}><Check size={16} />想起来了</button>
-    </div> : null}
-  </div>;
+  );
 }
