@@ -303,13 +303,16 @@ export function App() {
     return data.cards.filter((card) => card.collectionId === activeCollection && (!needle || `${card.title} ${card.body} ${cardPreview(card)}`.toLowerCase().includes(needle)));
   }, [activeCollection, data.cards, query]);
 
-  // 回顾近期（近 1 个月内的最多 10 张卡片）
+  // 回顾近期（近 1 个月内的最多 10 张卡片，若无则智能回退到最新 10 张）
   const openRecent = useCallback(() => {
     const oneMonthAgo = Date.now() - 30 * 86400 * 1000;
-    const recent = data.cards
+    let recent = data.cards
       .filter((c) => new Date(c.createdAt).getTime() >= oneMonthAgo)
       .slice(0, 10);
-    if (!recent.length) return notify("近一个月内暂无卡片");
+    if (!recent.length && data.cards.length) {
+      recent = data.cards.slice(0, 10);
+    }
+    if (!recent.length) return notify("卡片库暂无卡片，先记录一张吧");
     setView({ name: "recall", cards: recent, index: 0 });
   }, [data.cards, notify]);
 
@@ -654,13 +657,16 @@ function BlindBoxModal(props: {
       all: Infinity,
     };
     const maxAge = rangeMs[range];
-    const filtered = props.cards.filter((card) => {
+    let filtered = props.cards.filter((card) => {
       const cardTime = new Date(card.createdAt).getTime();
       return now - cardTime <= maxAge;
     });
 
-    if (!filtered.length) {
-      props.notify("该时间范围内暂无卡片");
+    if (!filtered.length && props.cards.length) {
+      filtered = props.cards;
+      props.notify("所选时间段暂无卡片，已自动为你从全部卡片中抽取");
+    } else if (!filtered.length) {
+      props.notify("卡片库暂无卡片，先记录一张吧");
       return;
     }
 
@@ -755,6 +761,16 @@ function RecallScreen(props: {
     if (diff > 50) handlePrev();
     touchStartX.current = null;
   };
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "ArrowLeft") handlePrev();
+      else if (e.key === "ArrowRight") handleNext();
+      else if (e.key === "Escape") props.onBack();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [index, total, props.onBack]);
 
   const copy = async (text: string) => {
     await navigator.clipboard.writeText(text);
@@ -1745,6 +1761,23 @@ function ReviewScreen(props: {
     setCorrectCount(0);
     setFinished(false);
   };
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (selectedOption === null && currentQ) {
+        if (e.key === "1" && currentQ.options[0]) handleSelect(currentQ.options[0]);
+        else if (e.key === "2" && currentQ.options[1]) handleSelect(currentQ.options[1]);
+        else if (e.key === "3" && currentQ.options[2]) handleSelect(currentQ.options[2]);
+        else if (e.key === "4" && currentQ.options[3]) handleSelect(currentQ.options[3]);
+      } else if (selectedOption !== null && (e.key === "Enter" || e.key === "ArrowRight" || e.key === " ")) {
+        handleNext();
+      } else if (e.key === "Escape") {
+        props.onBack();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [selectedOption, currentQ, index, total, props.onBack]);
 
   // 结算页
   if (finished) {
