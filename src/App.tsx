@@ -134,23 +134,17 @@ function useOioData() {
   }, [reload]);
 
   const saveCard = useCallback(async (card: OioCard) => {
-    const next = { ...card, isDemo: false, updatedAt: new Date().toISOString(), syncState: "pending" as const };
+    const next = { ...card, isDemo: false, updatedAt: new Date().toISOString(), syncState: "synced" as const };
     await db.cards.put(next);
-    await queueSync("card", card.id, "upsert");
     await reload();
     void pushCardToCloud(next).catch(() => undefined);
     return next;
   }, [reload]);
 
   const deleteCard = useCallback(async (id: string) => {
-    const card = await db.cards.get(id);
-    if (!card) return;
-    const now = new Date().toISOString();
-    const next = { ...card, deletedAt: now, updatedAt: now, syncState: "pending" as const };
-    await db.cards.put(next);
-    await queueSync("card", id, "delete");
+    await db.cards.delete(id);
     await reload();
-    void deleteCardOnCloud(id, now).catch(() => undefined);
+    void deleteCardOnCloud(id).catch(() => undefined);
   }, [reload]);
 
   const saveSettings = useCallback(async (next: UserSettings) => {
@@ -221,7 +215,7 @@ export function App() {
     };
   }, []);
 
-  // 实时订阅 Supabase 数据库变更（跨设备秒级同步）
+  // 实时订阅 Supabase 数据库变更与 WebSocket 广播（跨设备秒级同步）
   useEffect(() => {
     if (!cloudConfigured || !sessionEmail) return;
     const unsubscribe = subscribeToCloudChanges(() => {
@@ -232,7 +226,7 @@ export function App() {
     };
   }, [data.reload, sessionEmail]);
 
-  // 后台自动同步（应用启动、切换标签页/切回前台、网络恢复及定时心跳）
+  // 后台超高频对齐（切回前台、聚焦及 2.5 秒心跳，确保两端绝对一致）
   useEffect(() => {
     if (!cloudConfigured || !sessionEmail || !online) return;
 
@@ -255,7 +249,7 @@ export function App() {
 
     window.addEventListener("focus", handleVisibilityOrFocus);
     document.addEventListener("visibilitychange", handleVisibilityOrFocus);
-    const timer = window.setInterval(handleVisibilityOrFocus, 15000);
+    const timer = window.setInterval(handleVisibilityOrFocus, 2500);
 
     return () => {
       window.removeEventListener("focus", handleVisibilityOrFocus);
@@ -339,7 +333,7 @@ export function App() {
                 onCloseMenu={() => setOpenMenuId(null)}
                 onOpen={() => { setOpenMenuId(null); setView({ name: "detail", cardId: card.id }); }}
                 onEdit={() => { setOpenMenuId(null); setView({ name: "editor", cardId: card.id }); }}
-                onDelete={() => { setOpenMenuId(null); void data.deleteCard(card.id).then(() => notify("卡片已移入回收状态")); }}
+                onDelete={() => { setOpenMenuId(null); void data.deleteCard(card.id).then(() => notify("卡片已删除")); }}
               />
             )) : <EmptyState onAdd={() => setView({ name: "editor" })} />}
           </section>
