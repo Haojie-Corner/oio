@@ -503,8 +503,12 @@ export function App() {
                 await data.saveCard({ ...saved, ai: { ...saved.ai, status: "processing" } });
                 const ai = await processCardWithAI(saved);
                 let finalCard: OioCard = { ...saved, ai, updatedAt: new Date().toISOString() };
-                const aiChineseTitle = ai.suggestedTitle?.trim() || ai.chineseMeaning?.trim();
-                if (aiChineseTitle && (!finalCard.title.trim() || !hasChineseText(finalCard.title) || finalCard.title === deriveAutoTitle(finalCard.body))) {
+                const aiChineseTitle = (ai.suggestedTitle?.trim() && hasChineseText(ai.suggestedTitle))
+                  ? ai.suggestedTitle.trim()
+                  : (ai.chineseMeaning?.trim() && hasChineseText(ai.chineseMeaning)
+                    ? ai.chineseMeaning.trim().slice(0, 16)
+                    : deriveAutoTitle(finalCard.body));
+                if (!finalCard.title.trim() || !hasChineseText(finalCard.title) || finalCard.title === deriveAutoTitle(finalCard.body)) {
                   finalCard.title = aiChineseTitle;
                 }
                 const folder = ai.suggestedFolder?.trim();
@@ -543,8 +547,12 @@ export function App() {
               await data.saveCard({ ...activeCard, ai: { ...activeCard.ai, status: "processing" } });
               const ai = await processCardWithAI({ ...activeCard, ai: { ...activeCard.ai, contentHash: undefined } });
               let finalCard: OioCard = { ...activeCard, ai, updatedAt: new Date().toISOString() };
-              const aiChineseTitle = ai.suggestedTitle?.trim() || ai.chineseMeaning?.trim();
-              if (aiChineseTitle && (!finalCard.title.trim() || !hasChineseText(finalCard.title) || finalCard.title === deriveAutoTitle(finalCard.body))) {
+              const aiChineseTitle = (ai.suggestedTitle?.trim() && hasChineseText(ai.suggestedTitle))
+                ? ai.suggestedTitle.trim()
+                : (ai.chineseMeaning?.trim() && hasChineseText(ai.chineseMeaning)
+                  ? ai.chineseMeaning.trim().slice(0, 16)
+                  : deriveAutoTitle(finalCard.body));
+              if (!finalCard.title.trim() || !hasChineseText(finalCard.title) || finalCard.title === deriveAutoTitle(finalCard.body)) {
                 finalCard.title = aiChineseTitle;
               }
               await data.saveCard(finalCard);

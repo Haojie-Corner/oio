@@ -1,6 +1,6 @@
 import { getLocalFallbackSettings, getSession, getSupabase } from "./cloud";
 import { db } from "./db";
-import { hashCardContent } from "./utils";
+import { hasChineseText, hashCardContent } from "./utils";
 import type { AIProviderConfig, CardAIResult, ChatMessage, KeywordMeta, OioCard } from "./types";
 
 const ASSISTANT_SYSTEM_PROMPT = `你是 OIO 随身英语搭子与表达助手。
@@ -101,8 +101,14 @@ function normalizeResult(value: Record<string, unknown>): ProviderPayload {
         };
       }).filter((item) => item.original && item.suggestion)
     : [];
+  const chineseMeaning = String(value.chineseMeaning || "").trim();
+  let rawTitle = String(value.suggestedTitle || "").trim();
+  // 必须保证为纯中文核心主题：如果 AI 返回了英文或空，自动用中文释义或第一句中文提炼作为主题
+  if (!hasChineseText(rawTitle)) {
+    rawTitle = chineseMeaning ? (chineseMeaning.split(/[\n，。！？.!?]/)[0].trim().slice(0, 16) || chineseMeaning.slice(0, 16)) : "";
+  }
   return {
-    suggestedTitle: String(value.suggestedTitle || ""),
+    suggestedTitle: rawTitle,
     organizedOriginal: String(value.organizedOriginal || ""),
     // 产品定位：一段输入只对应一句改写，多余的直接丢弃
     targetSentences: Array.isArray(value.targetSentences) ? value.targetSentences.map(String).slice(0, 1) : [],
@@ -110,7 +116,7 @@ function normalizeResult(value: Record<string, unknown>): ProviderPayload {
     corrections,
     practiceKeywords: Array.isArray(value.practiceKeywords) ? value.practiceKeywords.map(String).slice(0, 4) : [],
     keywordMeta: parseKeywordMeta(value.keywordMeta),
-    chineseMeaning: String(value.chineseMeaning || ""),
+    chineseMeaning,
     relatedTags: Array.isArray(value.relatedTags) ? value.relatedTags.map(String).slice(0, 4) : [],
     suggestedFolder: "",
     inputTokens: 0,
