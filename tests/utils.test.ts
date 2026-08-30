@@ -86,6 +86,7 @@ describe("OIO local learning helpers", () => {
     expect(deriveAutoTitle("Hello world", "欢迎彼得到家做晚饭", "欢迎彼得")).toBe("欢迎彼得到家做晚饭");
     expect(deriveAutoTitle("Hello world", "", "朋友聚餐")).toBe("朋友聚餐");
     expect(deriveAutoTitle("今天下了一场暴雨，下班路上一片泥泞。")).toBe("今天下了一场暴雨");
-    expect(deriveAutoTitle("Hey, Peter. Welcome to my home.")).toBe("Hey, Peter");
+    expect(deriveAutoTitle("Hey, Peter. Welcome to my home.")).toBe("朋友聚会与拜访");
+    expect(deriveAutoTitle("Hello, it's sunny and hot today but it's warm inside.")).toBe("晴朗好天气与日常");
   });
 });

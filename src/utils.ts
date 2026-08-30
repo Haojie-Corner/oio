@@ -9,12 +9,25 @@ export function hasChineseText(text: string) {
 }
 
 export function deriveAutoTitle(body: string, aiTitle?: string, chineseMeaning?: string) {
-  if (aiTitle?.trim()) return aiTitle.trim();
-  if (chineseMeaning?.trim()) return chineseMeaning.trim();
+  if (aiTitle?.trim() && hasChineseText(aiTitle)) return aiTitle.trim();
+  if (chineseMeaning?.trim() && hasChineseText(chineseMeaning)) return chineseMeaning.trim();
   const trimmed = body.trim();
-  if (!trimmed) return "未命名记录";
-  const firstLine = trimmed.split(/[\n，。！？.!?]/)[0].trim();
-  return firstLine ? firstLine.slice(0, 24) : trimmed.slice(0, 24);
+  if (!trimmed) return "日常随记";
+  // 如果输入本身含有中文，提取第一句中文核心短句
+  if (hasChineseText(trimmed)) {
+    const firstLine = trimmed.split(/[\n，。！？.!?]/)[0].trim();
+    return firstLine ? firstLine.slice(0, 18) : trimmed.slice(0, 18);
+  }
+  // 如果输入是纯英文，根据语义关键词智能映射中文主题（绝不输出英文切片）
+  const lower = trimmed.toLowerCase();
+  if (/\b(weather|sunny|rain|snow|hot|cold|warm|cloudy|wind|storm|spring|summer|autumn|winter)\b/i.test(lower)) return "晴朗好天气与日常";
+  if (/\b(dinner|lunch|breakfast|cook|eat|food|coffee|tea|restaurant|delicious|meal|dish)\b/i.test(lower)) return "美食与烹饪聚餐";
+  if (/\b(welcome|home|friend|party|meet|visit|guest|invite)\b/i.test(lower)) return "朋友聚会与拜访";
+  if (/\b(work|meeting|project|office|job|busy|deadline|boss|email|company)\b/i.test(lower)) return "职场工作与任务";
+  if (/\b(study|learn|book|english|read|exam|school|class|practice)\b/i.test(lower)) return "学习与语言心得";
+  if (/\b(drive|car|train|bus|flight|trip|travel|subway|walk|traffic|hotel)\b/i.test(lower)) return "出行与旅途碎念";
+  if (/\b(happy|tired|sleep|relax|weekend|morning|night|exhausted|feeling|mood)\b/i.test(lower)) return "生活随笔与心境";
+  return "地道日常表达";
 }
 
 export function dayKeyOf(date: Date) {

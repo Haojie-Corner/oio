@@ -498,11 +498,15 @@ export function App() {
           onSave={async (card) => {
             const saved = await data.saveCard(card);
             setView({ name: "detail", cardId: saved.id });
-            if (saved.tasks.length && data.settings.provider.enabled) {
+            if (data.settings.provider.enabled) {
               try {
                 await data.saveCard({ ...saved, ai: { ...saved.ai, status: "processing" } });
                 const ai = await processCardWithAI(saved);
                 let finalCard: OioCard = { ...saved, ai, updatedAt: new Date().toISOString() };
+                const aiChineseTitle = ai.suggestedTitle?.trim() || ai.chineseMeaning?.trim();
+                if (aiChineseTitle && (!finalCard.title.trim() || !hasChineseText(finalCard.title) || finalCard.title === deriveAutoTitle(finalCard.body))) {
+                  finalCard.title = aiChineseTitle;
+                }
                 const folder = ai.suggestedFolder?.trim();
                 if (folder && folder !== "生活集") {
                   const existing = data.collections.find((item) => item.name === folder);
@@ -517,7 +521,7 @@ export function App() {
                 }
                 await data.saveCard(finalCard);
                 await data.recordAiUsage(ai);
-                notify(folder && folder !== "生活集" ? `AI 处理完成，已归入「${folder}」` : "AI 处理完成");
+                notify(folder && folder !== "生活集" ? `AI 分析完成，已归入「${folder}」` : "AI 分析完成，已提炼中文主题");
               } catch (error) { notify(error instanceof Error ? error.message : "AI 暂不可用"); }
             } else notify("卡片已保存在本地");
           }}
@@ -538,9 +542,14 @@ export function App() {
             try {
               await data.saveCard({ ...activeCard, ai: { ...activeCard.ai, status: "processing" } });
               const ai = await processCardWithAI({ ...activeCard, ai: { ...activeCard.ai, contentHash: undefined } });
-              await data.saveCard({ ...activeCard, ai, updatedAt: new Date().toISOString() });
+              let finalCard: OioCard = { ...activeCard, ai, updatedAt: new Date().toISOString() };
+              const aiChineseTitle = ai.suggestedTitle?.trim() || ai.chineseMeaning?.trim();
+              if (aiChineseTitle && (!finalCard.title.trim() || !hasChineseText(finalCard.title) || finalCard.title === deriveAutoTitle(finalCard.body))) {
+                finalCard.title = aiChineseTitle;
+              }
+              await data.saveCard(finalCard);
               await data.recordAiUsage(ai);
-              notify("已重新生成");
+              notify("已重新生成中文主题与练习");
             } catch (error) { notify(error instanceof Error ? error.message : "AI 暂不可用"); }
           }}
           notify={notify}
