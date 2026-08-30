@@ -513,39 +513,49 @@ export function App() {
           categories={data.categories}
           onCancel={() => setView({ name: "home" })}
           onSave={async (card) => {
-            const tempTitle = card.title?.trim() || deriveAutoTitle(card.body);
-            const saved = await data.saveCard({ ...card, title: tempTitle });
-            setView({ name: "detail", cardId: saved.id });
-            if (data.settings.provider.enabled) {
-              try {
-                await data.saveCard({ ...saved, ai: { ...saved.ai, status: "processing" } });
-                const ai = await processCardWithAI(saved);
-                let finalCard: OioCard = { ...saved, ai, updatedAt: new Date().toISOString() };
-                const aiChineseTitle = (ai.suggestedTitle?.trim() && hasChineseText(ai.suggestedTitle))
-                  ? ai.suggestedTitle.trim()
-                  : (ai.chineseMeaning?.trim() && hasChineseText(ai.chineseMeaning)
-                    ? ai.chineseMeaning.trim().slice(0, 16)
-                    : tempTitle);
-                if (!card.title?.trim() || card.title === tempTitle || !hasChineseText(finalCard.title)) {
-                  finalCard.title = aiChineseTitle;
-                }
-                const folder = ai.suggestedFolder?.trim();
-                if (folder && folder !== "生活集") {
-                  const existing = data.collections.find((item) => item.name === folder);
-                  if (existing) {
-                    finalCard = { ...finalCard, collectionId: existing.id };
-                  } else {
-                    const collectionId = makeId("collection");
-                    await db.collections.put({ id: collectionId, name: folder, createdAt: new Date().toISOString() });
-                    finalCard = { ...finalCard, collectionId };
+            try {
+              const tempTitle = card.title?.trim() || deriveAutoTitle(card.body);
+              const saved = await data.saveCard({ ...card, title: tempTitle });
+              setView({ name: "detail", cardId: saved.id });
+              if (data.settings.provider.enabled) {
+                try {
+                  await data.saveCard({ ...saved, ai: { ...saved.ai, status: "processing" } });
+                  const ai = await processCardWithAI(saved);
+                  let finalCard: OioCard = { ...saved, ai, updatedAt: new Date().toISOString() };
+                  const aiChineseTitle = (ai.suggestedTitle?.trim() && hasChineseText(ai.suggestedTitle))
+                    ? ai.suggestedTitle.trim()
+                    : (ai.chineseMeaning?.trim() && hasChineseText(ai.chineseMeaning)
+                      ? ai.chineseMeaning.trim().slice(0, 16)
+                      : tempTitle);
+                  if (!card.title?.trim() || card.title === tempTitle || !hasChineseText(finalCard.title)) {
+                    finalCard.title = aiChineseTitle;
                   }
-                  setActiveCollection(finalCard.collectionId);
+                  const folder = ai.suggestedFolder?.trim();
+                  if (folder && folder !== "生活集") {
+                    const existing = data.collections.find((item) => item.name === folder);
+                    if (existing) {
+                      finalCard = { ...finalCard, collectionId: existing.id };
+                    } else {
+                      const collectionId = makeId("collection");
+                      await db.collections.put({ id: collectionId, name: folder, createdAt: new Date().toISOString() });
+                      finalCard = { ...finalCard, collectionId };
+                    }
+                    setActiveCollection(finalCard.collectionId);
+                  }
+                  await data.saveCard(finalCard);
+                  await data.recordAiUsage(ai);
+                  notify(folder && folder !== "生活集" ? `AI 分析完成，已归入「${folder}」` : "AI 分析完成，已提炼中文主题");
+                } catch (error) {
+                  console.warn("AI error:", error);
+                  notify(error instanceof Error ? error.message : "AI 暂不可用");
                 }
-                await data.saveCard(finalCard);
-                await data.recordAiUsage(ai);
-                notify(folder && folder !== "生活集" ? `AI 分析完成，已归入「${folder}」` : "AI 分析完成，已提炼中文主题");
-              } catch (error) { notify(error instanceof Error ? error.message : "AI 暂不可用"); }
-            } else notify("卡片已保存在本地");
+              } else {
+                notify("卡片已保存在本地");
+              }
+            } catch (err) {
+              console.error("Save card error:", err);
+              notify("保存失败，请重试");
+            }
           }}
         />
       ) : null}
@@ -1160,9 +1170,6 @@ const CardEditor = memo(function CardEditor(props: { card?: OioCard; collections
     if (countSpanRef.current) {
       countSpanRef.current.textContent = `${val.length}/5000`;
     }
-    if (submitBtnRef.current) {
-      submitBtnRef.current.disabled = !val.trim();
-    }
   };
 
   const toggleTask = (task: AITask) => setTasks((current) => current.includes(task) ? current.filter((item) => item !== task) : [...current, task]);
@@ -1280,7 +1287,7 @@ const CardEditor = memo(function CardEditor(props: { card?: OioCard; collections
       <TaskToggle checked={tasks.includes("reply")} label="目标语言回复" onClick={() => toggleTask("reply")} />
       <TaskToggle checked={tasks.includes("rewrite")} label="目标语言改写" onClick={() => toggleTask("rewrite")} />
     </div>
-    <footer className="editor-footer"><div className="media-actions"><button onClick={() => fileRef.current?.click()} aria-label="选择图片"><FileImage size={21} /></button><button onClick={() => cameraRef.current?.click()} aria-label="拍照"><Camera size={21} /></button><button className={recording ? "recording" : ""} onClick={toggleDictation} aria-label={recording ? "停止录音" : "语音输入"}><Microphone size={21} /></button><input ref={fileRef} hidden type="file" accept="image/*" multiple onChange={(event) => void handleFiles(event.target.files)} /><input ref={cameraRef} hidden type="file" accept="image/*" capture="environment" onChange={(event) => void handleFiles(event.target.files)} /></div><span ref={countSpanRef}>{props.card?.body?.length ?? 0}/5000</span><button ref={submitBtnRef} className="primary-button" disabled={!props.card?.body?.trim()} onClick={() => void submit()}>完成</button></footer>
+    <footer className="editor-footer"><div className="media-actions"><button onClick={() => fileRef.current?.click()} aria-label="选择图片"><FileImage size={21} /></button><button onClick={() => cameraRef.current?.click()} aria-label="拍照"><Camera size={21} /></button><button className={recording ? "recording" : ""} onClick={toggleDictation} aria-label={recording ? "停止录音" : "语音输入"}><Microphone size={21} /></button><input ref={fileRef} hidden type="file" accept="image/*" multiple onChange={(event) => void handleFiles(event.target.files)} /><input ref={cameraRef} hidden type="file" accept="image/*" capture="environment" onChange={(event) => void handleFiles(event.target.files)} /></div><span ref={countSpanRef}>{props.card?.body?.length ?? 0}/5000</span><button ref={submitBtnRef} className="primary-button" onClick={() => void submit()}>完成</button></footer>
   </div>;
 });
 
