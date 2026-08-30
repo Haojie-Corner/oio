@@ -85,7 +85,25 @@ function buildPrompt(tasks: string[], title: string, content: string) {
   const userTitleInstruction = hasCustomTitle
     ? `用户指定自定义标题：${title.trim()}`
     : "标题：无（必须由你根据【用户记录内容】的核心语义深度理解，提炼精准、生动、具体且言之有物的纯中文主题总结）";
-  return `你是 OIO 语言自然生长导师 & 语境转译专家。用户会输入中文、英文或中英混合的生活碎片，可能带着抱怨、欣喜、疲惫等真实情绪。根据启用任务生成结果。\n启用任务：${tasks.join(", ")}\n${userTitleInstruction}\n用户记录内容：${content}\n\n要求：\n1. 深度理解场景与情绪，输出母语者在真实生活中会说的地道英文（保留第一人称，语调与用户情绪一致），坚决杜绝生硬直译和中式英语。\n2. targetSentences 只包含 1 个元素：无论输入长短，改写成一句自然地道的目标语言。\n3. suggestedTitle 必须是【根据用户输入内容的核心思想深度理解并精准提炼出的纯中文主题总结】（4~10个纯中文汉字，如“吃苹果面条与帮父母”、“寻找附近超市与问路”、“初次问候与自我介绍”、“彼得来家里做客”）。严禁使用“生活随笔与心境”、“朋友聚会与拜访”、“地道日常表达”等空泛套话，严禁直接复制英文！\n4. practiceKeywords 提取 2~4 个最值得学习的动词短语、固定搭配或核心名词短语（不要单个普通单词，每个不超过 4 个单词）。\n5. keywordMeta 为每个挖空短语生成 2 个高迷惑性但当前语境下不匹配的干扰项，以及一句中文解析（说明为什么这个表达比普通说法更地道）。\n6. chineseMeaning 用一句简练中文概括整段意思。\n7. relatedTags 给出 2~4 个描述这段生活场景的中文标签。\n\n只返回 JSON：{"suggestedTitle":"精准中文主题总结(4~10字纯中文，严禁空泛套话)","organizedOriginal":"整理后的原文","targetSentences":["一句自然目标语言"],"targetReply":"简短自然回复","practiceKeywords":["核心短语"],"keywordMeta":[{"phrase":"与 practiceKeywords 对应的短语","distractors":["干扰项1","干扰项2"],"explanation":"中文解析：为什么这个表达更地道"}],"chineseMeaning":"简练中文意思","relatedTags":["场景标签"],"suggestedFolder":"建议归档的专题文件夹名(2~6个字,如 车主日常)"}`;
+
+  const wantRewrite = tasks.includes("rewrite");
+  const wantReply = tasks.includes("reply");
+  const wantOrganize = tasks.includes("organize");
+
+  return `你是 OIO 语言自然生长导师 & 语境转译专家。用户输入了生活碎片，可能带着真实情绪。根据启用的任务生成结果。
+启用任务：${tasks.length ? tasks.join(", ") : "仅提炼中文主题"}
+${userTitleInstruction}
+用户记录内容：${content}
+
+要求：
+1. 【必做】suggestedTitle 必须是【根据用户输入内容的核心思想深度理解并精准提炼出的纯中文主题总结】（4~10个纯中文汉字，如“初夏酷暑与蓝天”、“吃苹果面条与帮父母”、“寻找附近超市与问路”）。严禁使用“生活随笔与心境”、“朋友聚会与拜访”、“地道日常表达”等空泛套话，严禁直接复制英文！
+2. 【必做】chineseMeaning 用一句简练中文概括整段意思。
+3. ${wantOrganize ? "【已启用】organizedOriginal: 整理后的原文（修正错别字、病句与标点排版）。" : "【未启用】organizedOriginal: 返回空字符串 \"\"。"}
+4. ${wantRewrite ? "【已启用】targetSentences: 只包含 1 个元素，改写成一句母语者在真实生活中会说的地道英文（保留第一人称与情绪，杜绝中式直译）；practiceKeywords 提取 2~4 个最核心动词短语或固定搭配；keywordMeta 为每个短语生成 2 个干扰项和中文地道解析。" : "【未启用】targetSentences 返回空数组 []；practiceKeywords 返回空数组 []；keywordMeta 返回空数组 []。"}
+5. ${wantReply ? "【已启用】targetReply: 像真人朋友搭子一样给出简短自然的目标语言回复接话。" : "【未启用】targetReply: 返回空字符串 \"\"。"}
+6. relatedTags 给出 2~4 个描述这段生活场景的中文标签。
+
+只返回 JSON：{"suggestedTitle":"精准中文主题总结(4~10字纯中文)","organizedOriginal":"${wantOrganize ? "整理后的原文" : ""}","targetSentences":${wantRewrite ? "[\"一句自然目标语言\"]" : "[]"},"targetReply":"${wantReply ? "简短自然回复" : ""}","practiceKeywords":${wantRewrite ? "[\"核心短语\"]" : "[]"},"keywordMeta":${wantRewrite ? "[{\"phrase\":\"核心短语\",\"distractors\":[\"干扰项1\",\"干扰项2\"],\"explanation\":\"中文解析\"}]" : "[]"},"chineseMeaning":"简练中文意思","relatedTags":["场景标签"],"suggestedFolder":"建议归档文件夹名(2~6字)"}`;
 }
 
 function stripFence(value: string) {
@@ -104,7 +122,11 @@ function parseKeywordMeta(value: unknown): KeywordMeta[] {
   }).filter((item) => item.phrase);
 }
 
-function normalizeResult(value: Record<string, unknown>): ProviderPayload {
+function normalizeResult(value: Record<string, unknown>, tasks: string[]): ProviderPayload {
+  const wantRewrite = tasks.includes("rewrite");
+  const wantReply = tasks.includes("reply");
+  const wantOrganize = tasks.includes("organize");
+
   const corrections = Array.isArray(value.corrections)
     ? value.corrections.slice(0, 3).map((item) => {
         const row = item as Partial<{ original: unknown; suggestion: unknown; reason: unknown }>;
@@ -123,13 +145,12 @@ function normalizeResult(value: Record<string, unknown>): ProviderPayload {
   }
   return {
     suggestedTitle: rawTitle,
-    organizedOriginal: String(value.organizedOriginal || ""),
-    // 产品定位：一段输入只对应一句改写，多余的直接丢弃
-    targetSentences: Array.isArray(value.targetSentences) ? value.targetSentences.map(String).slice(0, 1) : [],
-    targetReply: String(value.targetReply || ""),
-    corrections,
-    practiceKeywords: Array.isArray(value.practiceKeywords) ? value.practiceKeywords.map(String).slice(0, 4) : [],
-    keywordMeta: parseKeywordMeta(value.keywordMeta),
+    organizedOriginal: wantOrganize ? String(value.organizedOriginal || "") : "",
+    targetSentences: wantRewrite && Array.isArray(value.targetSentences) ? value.targetSentences.map(String).slice(0, 1) : [],
+    targetReply: wantReply ? String(value.targetReply || "") : "",
+    corrections: wantOrganize ? corrections : [],
+    practiceKeywords: wantRewrite && Array.isArray(value.practiceKeywords) ? value.practiceKeywords.map(String).slice(0, 4) : [],
+    keywordMeta: wantRewrite ? parseKeywordMeta(value.keywordMeta) : [],
     chineseMeaning,
     relatedTags: Array.isArray(value.relatedTags) ? value.relatedTags.map(String).slice(0, 4) : [],
     suggestedFolder: "",
@@ -149,7 +170,7 @@ async function callProviderDirect(provider: AIProviderConfig, card: OioCard, has
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 60_000);
   let response: Response;
-  const effectiveTasks = card.tasks?.length ? card.tasks : ["organize", "rewrite", "reply"];
+  const effectiveTasks = card.tasks ?? [];
   try {
     response = await fetch(`${provider.baseUrl.replace(/\/$/, "")}/chat/completions`, {
       method: "POST",
@@ -182,7 +203,7 @@ async function callProviderDirect(provider: AIProviderConfig, card: OioCard, has
   } catch {
     throw new Error("AI 返回格式异常，请重新生成一次。");
   }
-  const result = normalizeResult(parsed);
+  const result = normalizeResult(parsed, effectiveTasks);
   return {
     suggestedTitle: result.suggestedTitle,
     organizedSource: result.organizedOriginal || card.body,
@@ -225,19 +246,22 @@ export async function processCardWithAI(card: OioCard): Promise<CardAIResult> {
       body: { cardId: card.id, title: card.title, content: card.body, tasks: card.tasks, contentHash: hash },
     });
     if (error) throw new Error((error as { message?: string }).message || "AI 处理失败");
+    const wantRewrite = card.tasks.includes("rewrite");
+    const wantReply = card.tasks.includes("reply");
+    const wantOrganize = card.tasks.includes("organize");
     return {
       organizedSource: String(data.organizedOriginal ?? card.body),
-      rewrittenSentences: Array.isArray(data.targetSentences) ? data.targetSentences.map(String).slice(0, 1) : [],
-      reply: String(data.targetReply ?? ""),
-      corrections: Array.isArray(data.corrections)
+      rewrittenSentences: wantRewrite && Array.isArray(data.targetSentences) ? data.targetSentences.map(String).slice(0, 1) : [],
+      reply: wantReply ? String(data.targetReply ?? "") : "",
+      corrections: wantOrganize && Array.isArray(data.corrections)
         ? data.corrections.slice(0, 3).map((item: { original?: unknown; suggestion?: unknown; reason?: unknown }) => ({
             original: String(item.original ?? ""),
             corrected: String(item.suggestion ?? ""),
             reason: String(item.reason ?? ""),
           }))
         : [],
-      practiceKeywords: Array.isArray(data.practiceKeywords) ? data.practiceKeywords.map(String).slice(0, 4) : [],
-      keywordMeta: parseKeywordMeta(data.keywordMeta),
+      practiceKeywords: wantRewrite && Array.isArray(data.practiceKeywords) ? data.practiceKeywords.map(String).slice(0, 4) : [],
+      keywordMeta: wantRewrite ? parseKeywordMeta(data.keywordMeta) : [],
       chineseMeaning: String(data.chineseMeaning ?? ""),
       relatedTags: Array.isArray(data.relatedTags) ? data.relatedTags.map(String).slice(0, 4) : [],
       suggestedFolder: String(data.suggestedFolder ?? ""),

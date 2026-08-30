@@ -541,7 +541,7 @@ export function App() {
                   const cardProcessing: OioCard = { ...saved, ai: { ...saved.ai, status: "processing" } };
                   await data.saveCard(cardProcessing);
                   setTransientCard(cardProcessing);
-                  const cardToProcess: OioCard = { ...saved, title: userExplicitTitle, tasks: (saved.tasks.length ? saved.tasks : ["organize", "rewrite", "reply"]) as AITask[] };
+                  const cardToProcess: OioCard = { ...saved, title: userExplicitTitle, tasks: saved.tasks };
                   const ai = await processCardWithAI(cardToProcess);
                   let finalCard: OioCard = { ...saved, ai, updatedAt: new Date().toISOString() };
                   const aiChineseTitle = (ai.suggestedTitle?.trim() && hasChineseText(ai.suggestedTitle))
@@ -600,7 +600,7 @@ export function App() {
               const processingCard: OioCard = { ...activeCard, ai: { ...activeCard.ai, status: "processing" } };
               await data.saveCard(processingCard);
               setTransientCard(processingCard);
-              const ai = await processCardWithAI({ ...activeCard, title: hasCustomTitle ? activeCard.title : "", tasks: activeCard.tasks.length ? activeCard.tasks : ["organize", "rewrite", "reply"], ai: { ...activeCard.ai, contentHash: undefined } });
+              const ai = await processCardWithAI({ ...activeCard, title: hasCustomTitle ? activeCard.title : "", tasks: activeCard.tasks, ai: { ...activeCard.ai, contentHash: undefined } });
               let finalCard: OioCard = { ...activeCard, ai, updatedAt: new Date().toISOString() };
               const aiChineseTitle = (ai.suggestedTitle?.trim() && hasChineseText(ai.suggestedTitle))
                 ? ai.suggestedTitle.trim()
@@ -1191,7 +1191,7 @@ const CardEditor = memo(function CardEditor(props: { card?: OioCard; collections
   const countSpanRef = useRef<HTMLSpanElement>(null);
   const [collectionId, setCollectionId] = useState(props.card?.collectionId ?? props.collections[0]?.id ?? "life");
   const [categoryId] = useState(props.card?.categoryId ?? "uncategorized");
-  const [tasks, setTasks] = useState<AITask[]>(props.card?.tasks?.length ? props.card.tasks : ["organize", "rewrite", "reply"]);
+  const [tasks, setTasks] = useState<AITask[]>(props.card ? (props.card.tasks ?? ["organize"]) : ["organize"]);
   const [attachments, setAttachments] = useState(props.card?.attachments ?? []);
   const [recording, setRecording] = useState(false);
   const [interimText, setInterimText] = useState("");
@@ -1228,7 +1228,7 @@ const CardEditor = memo(function CardEditor(props: { card?: OioCard; collections
         categoryId,
         title: cleanTitle,
         body: trimmed,
-        tasks: tasks.length ? tasks : ["organize", "rewrite", "reply"],
+        tasks,
         attachments,
         ai: props.card && props.card.body === trimmed ? props.card.ai : emptyAI,
         createdAt: props.card?.createdAt ?? now,
@@ -1364,6 +1364,8 @@ function CardDetail(props: { card: OioCard; allCards: OioCard[]; initialPractice
   }, [props.card.id, props.card.ai?.status, props.card.body, props.onRegenerate]);
 
   const isProcessing = props.card.ai?.status === "processing";
+  const hasRewriteTask = props.card.tasks.includes("rewrite");
+  const hasReplyTask = props.card.tasks.includes("reply");
   const sentences = props.card.ai.rewrittenSentences.length ? props.card.ai.rewrittenSentences : [props.card.body];
   const blanks = props.card.ai.practiceKeywords;
   const cloze = clozeSentence(sentences.join(" "), blanks);
@@ -1386,7 +1388,7 @@ function CardDetail(props: { card: OioCard; allCards: OioCard[]; initialPractice
   const hasValidAiTitle = Boolean(aiTitle && hasChineseText(aiTitle) && !isAutoOrGenericTitle(aiTitle));
   const hasUserCustomTitle = Boolean(props.card.title?.trim() && !isAutoOrGenericTitle(props.card.title));
   const cardTitle = isProcessing
-    ? "正在提炼主题与改写…"
+    ? "正在提炼主题…"
     : (hasValidAiTitle
       ? aiTitle!
       : (hasUserCustomTitle
@@ -1410,29 +1412,31 @@ function CardDetail(props: { card: OioCard; allCards: OioCard[]; initialPractice
           <button className="section-copy" onClick={() => void copy(props.card.body)}><Copy size={17} />复制原文</button>
         </DetailSection>
       )}
-      <DetailSection title={practice ? PRACTICE_TITLES[practice] : (props.card.ai.rewrittenSentences.length ? "目标语言改写" : "改写与练习")} collapsed={collapsed.rewrite} onToggle={() => setCollapsed((value) => ({ ...value, rewrite: !value.rewrite }))}>
-        {practice ? (
-          <PracticeArea key={practice} mode={practice} sentence={sentences.join(" ")} blanks={blanks} keywordMeta={props.card.ai.keywordMeta ?? []} recall={recall} helper={helper} legacy={cloze} onPractice={(mode, correct) => props.onPractice(props.card.id, mode, correct)} notify={props.notify} />
-        ) : (
-          <>
-        {sentences.map((sentence) => <div className="sentence-row" key={sentence}><SentenceTokens sentence={sentence} blanks={blanks} onToggleWord={toggleBlank} onRemovePhrase={removePhrase} /><button onClick={() => speak(sentence)} aria-label="朗读本句"><Play size={18} weight="fill" /></button></div>)}
-        <p className="blank-hint">点击句子里的单词设为挖空词，再从底部选择练习方式。</p>
-        {props.card.ai.keywordMeta?.length ? (
-          <details className="practice-helper">
-            <summary>表达解析（为什么这样说更地道）</summary>
-            {props.card.ai.keywordMeta.map((meta) => <p key={meta.phrase}><strong>{meta.phrase}</strong> — {meta.explanation}</p>)}
-          </details>
-        ) : null}
-        <button className="section-copy" onClick={() => void copy(sentences.join(" "))}><Copy size={17} />复制全部</button>
-          </>
-        )}
-      </DetailSection>
-      {practice ? null : (
+      {hasRewriteTask ? (
+        <DetailSection title={practice ? PRACTICE_TITLES[practice] : (props.card.ai.rewrittenSentences.length ? "目标语言改写" : "改写与练习")} collapsed={collapsed.rewrite} onToggle={() => setCollapsed((value) => ({ ...value, rewrite: !value.rewrite }))}>
+          {practice ? (
+            <PracticeArea key={practice} mode={practice} sentence={sentences.join(" ")} blanks={blanks} keywordMeta={props.card.ai.keywordMeta ?? []} recall={recall} helper={helper} legacy={cloze} onPractice={(mode, correct) => props.onPractice(props.card.id, mode, correct)} notify={props.notify} />
+          ) : (
+            <>
+          {sentences.map((sentence) => <div className="sentence-row" key={sentence}><SentenceTokens sentence={sentence} blanks={blanks} onToggleWord={toggleBlank} onRemovePhrase={removePhrase} /><button onClick={() => speak(sentence)} aria-label="朗读本句"><Play size={18} weight="fill" /></button></div>)}
+          <p className="blank-hint">点击句子里的单词设为挖空词，再从底部选择练习方式。</p>
+          {props.card.ai.keywordMeta?.length ? (
+            <details className="practice-helper">
+              <summary>表达解析（为什么这样说更地道）</summary>
+              {props.card.ai.keywordMeta.map((meta) => <p key={meta.phrase}><strong>{meta.phrase}</strong> — {meta.explanation}</p>)}
+            </details>
+          ) : null}
+          <button className="section-copy" onClick={() => void copy(sentences.join(" "))}><Copy size={17} />复制全部</button>
+            </>
+          )}
+        </DetailSection>
+      ) : null}
+      {practice ? null : (hasReplyTask ? (
         <DetailSection title="回复" collapsed={collapsed.reply} onToggle={() => setCollapsed((value) => ({ ...value, reply: !value.reply }))}>
           <div className="sentence-row"><p>{isProcessing ? "正在生成地道回复…" : (props.card.ai.reply || "连接 AI 后，这里会给出自然的目标语言回复。")}</p>{props.card.ai.reply ? <button onClick={() => speak(props.card.ai.reply)} aria-label="朗读回复"><Play size={18} weight="fill" /></button> : null}</div>
           {props.card.ai.reply ? <button className="section-copy" onClick={() => void copy(props.card.ai.reply)}><Copy size={17} />复制回复</button> : null}
         </DetailSection>
-      )}
+      ) : null)}
     </article>
 
     {practice ? null : (related.length ? <section className="related-section">
@@ -1443,13 +1447,15 @@ function CardDetail(props: { card: OioCard; allCards: OioCard[]; initialPractice
       </button>)}
     </section> : null)}
 
-    <nav className="practice-nav">
-      <button className={practice === "reveal" ? "active" : ""} onClick={() => togglePractice("reveal")}><ArrowsLeftRight size={21} /><span>互译</span></button>
-      <button className={practice === "listen" ? "active" : ""} onClick={() => togglePractice("listen")}><Ear size={21} /><span>听</span></button>
-      <button className={practice === "cloze" ? "active" : ""} onClick={() => togglePractice("cloze")}><BookOpenText size={21} /><span>填</span></button>
-      <button className={practice === "choice" ? "active" : ""} onClick={() => togglePractice("choice")}><Check size={21} /><span>选</span></button>
-      <button onClick={() => speak(sentences.join(" "))}><Play size={21} weight="fill" /><span>播放</span></button>
-    </nav>
+    {hasRewriteTask ? (
+      <nav className="practice-nav">
+        <button className={practice === "reveal" ? "active" : ""} onClick={() => togglePractice("reveal")}><ArrowsLeftRight size={21} /><span>互译</span></button>
+        <button className={practice === "listen" ? "active" : ""} onClick={() => togglePractice("listen")}><Ear size={21} /><span>听</span></button>
+        <button className={practice === "cloze" ? "active" : ""} onClick={() => togglePractice("cloze")}><BookOpenText size={21} /><span>填</span></button>
+        <button className={practice === "choice" ? "active" : ""} onClick={() => togglePractice("choice")}><Check size={21} /><span>选</span></button>
+        <button onClick={() => speak(sentences.join(" "))}><Play size={21} weight="fill" /><span>播放</span></button>
+      </nav>
+    ) : null}
   </div>;
 }
 
