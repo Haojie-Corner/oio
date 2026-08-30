@@ -279,9 +279,9 @@ export function App() {
     };
   }, [data.reload, sessionEmail]);
 
-  // 后台超高频对齐（切回前台、聚焦及 2.5 秒心跳，确保两端绝对一致）
+  // 后台超高频对齐（切回前台、聚焦及 2.5 秒心跳，确保两端绝对一致；设置面板打开时暂停避免打扰用户输入）
   useEffect(() => {
-    if (!cloudConfigured || !sessionEmail || !online) return;
+    if (!cloudConfigured || !sessionEmail || !online || settingsOpen) return;
 
     const runSilentSync = async () => {
       try {
@@ -309,7 +309,7 @@ export function App() {
       document.removeEventListener("visibilitychange", handleVisibilityOrFocus);
       window.clearInterval(timer);
     };
-  }, [data.reload, online, sessionEmail]);
+  }, [data.reload, online, sessionEmail, settingsOpen]);
 
   const filteredCards = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -1429,28 +1429,24 @@ function SettingsPanel(props: {
   const [busy, setBusy] = useState(false);
   const [pendingCount, setPendingCount] = useState<number | null>(null);
 
-  useEffect(() => {
-    setDraft(props.settings);
-  }, [props.settings]);
-
   useEffect(() => { void db.syncQueue.count().then(setPendingCount); }, [props.settings.lastSyncedAt]);
   const total = draft.monthlyInputTokens + draft.monthlyOutputTokens;
   const updateProvider = (patch: Partial<UserSettings["provider"]>) => setDraft((value) => ({ ...value, provider: { ...value.provider, ...patch } }));
   const save = async () => {
     setBusy(true);
     try {
-      await props.onSave({
+      const updatedSettings: UserSettings = {
         ...draft,
         provider: {
           ...draft.provider,
           hasStoredKey: draft.provider.hasStoredKey || Boolean(draft.provider.apiKey),
         },
-      });
+      };
+      await props.onSave(updatedSettings);
       const session = await getSession();
-      if (session && draft.provider.apiKey) {
-        try { await saveProviderSecurely(draft.provider); } catch { /* 云端加密存储未就绪时保持本地保存即可 */ }
+      if (session) {
+        await saveCloudSettings(updatedSettings);
       }
-      if (session) await saveCloudSettings(draft);
       props.onClose();
     } finally { setBusy(false); }
   };
@@ -1460,7 +1456,49 @@ function SettingsPanel(props: {
       <div className="profile-row settings-profile"><img src={`${import.meta.env.BASE_URL}oio-icon-192.png`} alt="OIO 个人图标" /><div><input value={draft.displayName} onChange={(event) => setDraft((value) => ({ ...value, displayName: event.target.value }))} /><span className={props.sessionEmail ? "session-on" : undefined}>{props.sessionEmail ? `已登录 · ${props.sessionEmail}` : cloudConfigured ? "未登录，数据仅保存在本机" : "本地模式"}</span></div><span className="mode-badge">{props.sessionEmail ? "已连接云端" : "个人版"}</span></div>
       <SettingsGroup title="用量"><div className="usage-title"><span>本月 Token 用量</span><strong>{total.toLocaleString()}</strong></div><div className="usage-bar"><i style={{ width: `${Math.min(total / 2000, 100)}%` }} /></div><p>输入 {draft.monthlyInputTokens.toLocaleString()} · 输出 {draft.monthlyOutputTokens.toLocaleString()}，由 AI 处理自动累计，每月 1 日 00:00 刷新</p></SettingsGroup>
       <SettingsGroup title="AI 模型设置">
-        <div className="form-grid"><label>服务商<input value={draft.provider.providerName} onChange={(event) => updateProvider({ providerName: event.target.value })} /></label><label>Base URL<input list="oio-provider-urls" value={draft.provider.baseUrl} onChange={(event) => updateProvider({ baseUrl: event.target.value })} /><datalist id="oio-provider-urls"><option value="https://api.deepseek.com/v1">DeepSeek</option><option value="https://api.openai.com/v1">OpenAI</option><option value="https://api.moonshot.cn/v1">Kimi</option><option value="https://open.bigmodel.cn/api/paas/v4">智谱 GLM</option><option value="https://dashscope.aliyuncs.com/compatible-mode/v1">通义千问</option></datalist></label><label>模型名<input value={draft.provider.model} onChange={(event) => updateProvider({ model: event.target.value })} placeholder="例如 deepseek-chat、gpt-4o-mini" /></label><label>API Key<input type="password" value={draft.provider.apiKey ?? ""} onChange={(event) => updateProvider({ apiKey: event.target.value })} placeholder={draft.provider.apiKey ? "已保存在本机，留空不修改" : "粘贴你的 API Key"} /></label></div>
+        <div className="provider-preset-pills">
+          <button
+            type="button"
+            className={`preset-pill ${draft.provider.providerName === "DeepSeek" || draft.provider.baseUrl.includes("deepseek") ? "active" : ""}`}
+            onClick={() => updateProvider({ providerName: "DeepSeek", baseUrl: "https://api.deepseek.com/v1", model: draft.provider.model && draft.provider.model !== "gpt-4o-mini" ? draft.provider.model : "deepseek-chat" })}
+          >
+            DeepSeek (推荐)
+          </button>
+          <button
+            type="button"
+            className={`preset-pill ${draft.provider.providerName === "OpenAI" || draft.provider.baseUrl.includes("openai") ? "active" : ""}`}
+            onClick={() => updateProvider({ providerName: "OpenAI", baseUrl: "https://api.openai.com/v1", model: draft.provider.model && draft.provider.model !== "deepseek-chat" ? draft.provider.model : "gpt-4o-mini" })}
+          >
+            OpenAI
+          </button>
+          <button
+            type="button"
+            className={`preset-pill ${draft.provider.providerName === "Kimi" || draft.provider.baseUrl.includes("moonshot") ? "active" : ""}`}
+            onClick={() => updateProvider({ providerName: "Kimi", baseUrl: "https://api.moonshot.cn/v1", model: "moonshot-v1-8k" })}
+          >
+            Kimi (月之暗面)
+          </button>
+          <button
+            type="button"
+            className={`preset-pill ${draft.provider.providerName === "智谱 GLM" || draft.provider.baseUrl.includes("bigmodel") ? "active" : ""}`}
+            onClick={() => updateProvider({ providerName: "智谱 GLM", baseUrl: "https://open.bigmodel.cn/api/paas/v4", model: "glm-4-flash" })}
+          >
+            智谱 GLM
+          </button>
+          <button
+            type="button"
+            className={`preset-pill ${draft.provider.providerName === "通义千问" || draft.provider.baseUrl.includes("aliyuncs") ? "active" : ""}`}
+            onClick={() => updateProvider({ providerName: "通义千问", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen-plus" })}
+          >
+            通义千问
+          </button>
+        </div>
+        <div className="form-grid">
+          <label>服务商<input value={draft.provider.providerName} onChange={(event) => updateProvider({ providerName: event.target.value })} /></label>
+          <label>Base URL<input list="oio-provider-urls" value={draft.provider.baseUrl} onChange={(event) => updateProvider({ baseUrl: event.target.value })} /><datalist id="oio-provider-urls"><option value="https://api.deepseek.com/v1">DeepSeek</option><option value="https://api.openai.com/v1">OpenAI</option><option value="https://api.moonshot.cn/v1">Kimi</option><option value="https://open.bigmodel.cn/api/paas/v4">智谱 GLM</option><option value="https://dashscope.aliyuncs.com/compatible-mode/v1">通义千问</option></datalist></label>
+          <label>模型名<input value={draft.provider.model} onChange={(event) => updateProvider({ model: event.target.value })} placeholder="例如 deepseek-chat、gpt-4o-mini" /></label>
+          <label>API Key<input type="password" value={draft.provider.apiKey ?? ""} onChange={(event) => updateProvider({ apiKey: event.target.value })} placeholder={draft.provider.apiKey ? "已保存在本机，留空不修改" : "粘贴你的 API Key"} /></label>
+        </div>
         <label className="switch-row"><span><strong>启用真实 AI</strong><small>打开后新建卡片会自动改写、回复和纠错</small></span><input type="checkbox" checked={draft.provider.enabled} onChange={(event) => updateProvider({ enabled: event.target.checked })} /></label>
         <p className="settings-note">AI 设置与 API Key 会在本地持久化双重备份，并自动同步到你的云端账号。电脑端配置后手机端自动生效，网页更新也不会丢失。</p>
       </SettingsGroup>
