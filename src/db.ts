@@ -38,8 +38,8 @@ export const db = new OioDatabase();
 export async function seedDatabase() {
   const count = await db.cards.count();
   if (count === 0) {
-    // 演示卡片用随机 id：固定 id 会在不同账号间互相冲突（云端按 id 唯一）
-    const seededCards = demoCards.map((card) => ({ ...card, id: makeId("card") }));
+    // 演示卡片用随机 id，并标记 isDemo: true（避免登录后误上传到云端）
+    const seededCards = demoCards.map((card) => ({ ...card, id: makeId("card"), isDemo: true }));
     await db.transaction("rw", db.cards, db.collections, db.categories, db.settings, async () => {
       await db.cards.bulkPut(seededCards);
       await db.collections.bulkPut(demoCollections);

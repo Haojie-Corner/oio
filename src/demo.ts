@@ -36,6 +36,7 @@ const makeCard = (
   createdAt: atTime(hour, minute),
   updatedAt: atTime(hour, minute),
   syncState: "local",
+  isDemo: true,
 });
 
 export const demoCards: OioCard[] = [

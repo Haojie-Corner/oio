@@ -52,7 +52,19 @@ export interface OioCard {
   updatedAt: string;
   deletedAt?: string;
   syncState: "local" | "pending" | "synced" | "error";
+  isDemo?: boolean;
 }
+
+export const emptyAI: CardAIResult = {
+  organizedSource: "",
+  rewrittenSentences: [],
+  reply: "",
+  corrections: [],
+  practiceKeywords: [],
+  inputTokens: 0,
+  outputTokens: 0,
+  status: "idle",
+};
 
 export interface OioCollection {
   id: string;

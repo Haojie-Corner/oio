@@ -43,17 +43,21 @@ import {
 import { askAssistant, processCardWithAI } from "./ai";
 import {
   cloudConfigured,
+  deleteCardOnCloud,
   getSession,
+  pushCardToCloud,
   resetPassword,
   saveCloudSettings,
   saveProviderSecurely,
   signIn,
   signOut,
   signUp,
+  subscribeToCloudChanges,
   syncCloudData,
 } from "./cloud";
 import { db, exportAllData, queueSync } from "./db";
 import { defaultSettings } from "./demo";
+import { emptyAI } from "./types";
 import type {
   AITask,
   AppView,
@@ -82,17 +86,6 @@ import {
   splitClozeSegments,
   toggleWordInList,
 } from "./utils";
-
-const emptyAI: OioCard["ai"] = {
-  organizedSource: "",
-  rewrittenSentences: [],
-  reply: "",
-  corrections: [],
-  practiceKeywords: [],
-  inputTokens: 0,
-  outputTokens: 0,
-  status: "idle",
-};
 
 type SpeechRecognitionConstructor = new () => {
   lang: string;
@@ -141,19 +134,23 @@ function useOioData() {
   }, [reload]);
 
   const saveCard = useCallback(async (card: OioCard) => {
-    const next = { ...card, syncState: "pending" as const };
+    const next = { ...card, isDemo: false, updatedAt: new Date().toISOString(), syncState: "pending" as const };
     await db.cards.put(next);
     await queueSync("card", card.id, "upsert");
     await reload();
+    void pushCardToCloud(next).catch(() => undefined);
     return next;
   }, [reload]);
 
   const deleteCard = useCallback(async (id: string) => {
     const card = await db.cards.get(id);
     if (!card) return;
-    await db.cards.put({ ...card, deletedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), syncState: "pending" });
+    const now = new Date().toISOString();
+    const next = { ...card, deletedAt: now, updatedAt: now, syncState: "pending" as const };
+    await db.cards.put(next);
     await queueSync("card", id, "delete");
     await reload();
+    void deleteCardOnCloud(id, now).catch(() => undefined);
   }, [reload]);
 
   const saveSettings = useCallback(async (next: UserSettings) => {
@@ -224,20 +221,48 @@ export function App() {
     };
   }, []);
 
+  // 实时订阅 Supabase 数据库变更（跨设备秒级同步）
   useEffect(() => {
-    if (!online || !cloudConfigured) return;
-    let cancelled = false;
-    void (async () => {
-      const [session, pending] = await Promise.all([getSession(), db.syncQueue.count()]);
-      if (!session || pending === 0 || cancelled) return;
-      await syncCloudData();
-      if (!cancelled) {
+    if (!cloudConfigured || !sessionEmail) return;
+    const unsubscribe = subscribeToCloudChanges(() => {
+      void data.reload();
+    });
+    return () => {
+      unsubscribe();
+    };
+  }, [data.reload, sessionEmail]);
+
+  // 后台自动同步（应用启动、切换标签页/切回前台、网络恢复及定时心跳）
+  useEffect(() => {
+    if (!cloudConfigured || !sessionEmail || !online) return;
+
+    const runSilentSync = async () => {
+      try {
+        await syncCloudData();
         await data.reload();
-        notify("网络已恢复，离线修改已同步");
+      } catch {
+        // 静默同步无需打扰用户
       }
-    })().catch(() => undefined);
-    return () => { cancelled = true; };
-  }, [data.reload, notify, online]);
+    };
+
+    void runSilentSync();
+
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === "visible") {
+        void runSilentSync();
+      }
+    };
+
+    window.addEventListener("focus", handleVisibilityOrFocus);
+    document.addEventListener("visibilitychange", handleVisibilityOrFocus);
+    const timer = window.setInterval(handleVisibilityOrFocus, 15000);
+
+    return () => {
+      window.removeEventListener("focus", handleVisibilityOrFocus);
+      document.removeEventListener("visibilitychange", handleVisibilityOrFocus);
+      window.clearInterval(timer);
+    };
+  }, [data.reload, online, sessionEmail]);
 
   const filteredCards = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -356,7 +381,7 @@ export function App() {
           onAuth={() => setView({ name: "auth" })}
           onSync={async () => {
             try {
-              const merged = await syncCloudData(notify);
+              const { activeCount } = await syncCloudData(notify);
               const session = await getSession();
               await data.saveSettings({
                 ...data.settings,
@@ -365,7 +390,7 @@ export function App() {
               });
               await data.reload();
               void refreshSession();
-              notify(`同步完成，云端共 ${merged.length} 张卡片`);
+              notify(`同步完成，云端共 ${activeCount} 张有效卡片`);
             } catch (error) {
               const detail = error instanceof Error ? error.message
                 : typeof error === "object" && error ? String((error as { message?: string }).message ?? JSON.stringify(error)) : String(error);
