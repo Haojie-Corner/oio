@@ -33,6 +33,7 @@ import {
   Play,
   Plus,
   Power,
+  Robot,
   Shuffle,
   SignIn,
   SignOut,
@@ -382,13 +383,23 @@ export function App() {
           </section>
         </main>
         
-        {/* 底部输入条（与对标设计一致） */}
-        <div className="bottom-quick-bar" onClick={() => setView({ name: "editor" })}>
-          <NotePencil size={20} color="#777" />
-          <span className="bottom-quick-bar-text">记录点什么...</span>
-          <div className="bottom-quick-bar-icon" title="AI 智能记录">
-            <Sparkle size={19} weight="fill" />
+        {/* 底部输入条 */}
+        <div className="bottom-quick-bar">
+          <div className="bottom-quick-bar-left" onClick={() => setView({ name: "editor" })}>
+            <NotePencil size={20} color="#777" />
+            <span className="bottom-quick-bar-text">记录点什么...</span>
           </div>
+          <button
+            className="bottom-quick-bar-icon"
+            title="AI 助手"
+            onClick={(e) => {
+              e.stopPropagation();
+              setView({ name: "assistant" });
+            }}
+            aria-label="打开 AI 助手"
+          >
+            <Robot size={22} weight="fill" />
+          </button>
         </div>
       </div>
 
