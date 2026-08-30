@@ -8,6 +8,15 @@ export function hasChineseText(text: string) {
   return /[\u4e00-\u9fff]/.test(text);
 }
 
+export function deriveAutoTitle(body: string, aiTitle?: string, chineseMeaning?: string) {
+  if (aiTitle?.trim()) return aiTitle.trim();
+  if (chineseMeaning?.trim()) return chineseMeaning.trim();
+  const trimmed = body.trim();
+  if (!trimmed) return "未命名记录";
+  const firstLine = trimmed.split(/[\n，。！？.!?]/)[0].trim();
+  return firstLine ? firstLine.slice(0, 24) : trimmed.slice(0, 24);
+}
+
 export function dayKeyOf(date: Date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }

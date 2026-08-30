@@ -133,3 +133,8 @@
 .assistant-send-btn.active:hover{background:#000;transform:scale(1.04)}
 .assistant-send-btn.active:active{transform:scale(.96)}
 
+.recording-status-banner{display:flex;align-items:center;gap:8px;padding:8px 14px;margin-bottom:12px;background:#fdf2f2;border:1px solid #f8d7da;border-radius:10px;color:#c53030;font-size:13.5px;font-weight:500;animation:fade-in .15s ease}
+.recording-dot{width:8px;height:8px;border-radius:50%;background:#e53e3e;animation:pulse 1s infinite}
+.card-source-text{font-size:16px;line-height:1.65;color:#222;margin:0;white-space:pre-wrap}
+
+

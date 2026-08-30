@@ -83,6 +83,7 @@ import {
   clozeSentence,
   computeStreak,
   dayKeyOf,
+  deriveAutoTitle,
   formatFullDate,
   formatTime,
   hasChineseText,
@@ -1018,8 +1019,9 @@ function TrashScreen(props: {
 }
 
 function CardRow({ card, menuOpen, onToggleMenu, onCloseMenu, onOpen, onEdit, onDelete }: { card: OioCard; menuOpen: boolean; onToggleMenu: () => void; onCloseMenu: () => void; onOpen: () => void; onEdit: () => void; onDelete: () => void }) {
+  const rowTitle = card.title?.trim() || card.ai?.suggestedTitle?.trim() || card.ai?.chineseMeaning?.trim() || deriveAutoTitle(card.body);
   return <article className="card-row" onClick={onOpen}>
-    <div className="card-row-copy"><h2>{card.title || card.body.slice(0, 22)}</h2><p>{cardPreview(card)}</p><span>{formatCardStamp(card.createdAt)} {card.syncState === "pending" ? "· 待同步" : ""}</span></div>
+    <div className="card-row-copy"><h2>{rowTitle}</h2><p>{cardPreview(card)}</p><span>{formatCardStamp(card.createdAt)} {card.syncState === "pending" ? "· 待同步" : ""}</span></div>
     <div className="row-menu-wrap">
       <button className="more-button" aria-label="卡片菜单" onClick={(event) => { event.stopPropagation(); onToggleMenu(); }}>•••</button>
       {menuOpen ? <>
@@ -1105,6 +1107,8 @@ const CardEditor = memo(function CardEditor(props: { card?: OioCard; collections
   const [tasks, setTasks] = useState<AITask[]>(props.card?.tasks ?? []);
   const [attachments, setAttachments] = useState(props.card?.attachments ?? []);
   const [recording, setRecording] = useState(false);
+  const [interimText, setInterimText] = useState("");
+  const recognitionRef = useRef<any>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
 
@@ -1112,8 +1116,9 @@ const CardEditor = memo(function CardEditor(props: { card?: OioCard; collections
   const submit = async () => {
     if (!body.trim()) return;
     const now = new Date().toISOString();
+    const cleanTitle = title.trim() || deriveAutoTitle(body);
     await props.onSave({
-      id: props.card?.id ?? makeId("card"), collectionId, categoryId, title: title.trim(), body: body.trim(), tasks, attachments,
+      id: props.card?.id ?? makeId("card"), collectionId, categoryId, title: cleanTitle, body: body.trim(), tasks, attachments,
       ai: props.card && props.card.body === body.trim() ? props.card.ai : emptyAI,
       createdAt: props.card?.createdAt ?? now, updatedAt: now, syncState: "pending",
     });
@@ -1125,24 +1130,83 @@ const CardEditor = memo(function CardEditor(props: { card?: OioCard; collections
     setAttachments((current) => [...current, ...next].slice(0, 4));
   };
 
-  const startDictation = () => {
-    const Recognition = window.SpeechRecognition ?? window.webkitSpeechRecognition;
-    if (!Recognition) return window.alert("当前浏览器暂不支持网页听写，请使用系统键盘上的麦克风。");
-    const recognition = new Recognition();
-    recognition.lang = "zh-CN";
-    recognition.continuous = false;
-    recognition.interimResults = false;
-    recognition.onresult = (event) => setBody((current) => `${current}${current ? " " : ""}${event.results[0][0].transcript}`);
-    recognition.onend = () => setRecording(false);
-    recognition.onerror = () => setRecording(false);
-    setRecording(true);
-    recognition.start();
+  const toggleDictation = () => {
+    const SpeechRecognition = (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      window.alert("当前浏览器未开放网页语音识别接口。手机端或电脑端推荐直接点击键盘自带的麦克风（如 iPhone 键盘右下角麦克风）进行实时语音输入。");
+      return;
+    }
+
+    if (recording) {
+      try {
+        recognitionRef.current?.stop();
+      } catch {}
+      setRecording(false);
+      setInterimText("");
+      return;
+    }
+
+    try {
+      const recognition = new SpeechRecognition();
+      recognition.lang = "zh-CN";
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.maxAlternatives = 1;
+
+      recognition.onstart = () => {
+        setRecording(true);
+        setInterimText("");
+      };
+
+      recognition.onresult = (event: any) => {
+        let finalTranscript = "";
+        let currentInterim = "";
+
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          const transcript = event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            finalTranscript += transcript;
+          } else {
+            currentInterim += transcript;
+          }
+        }
+
+        if (finalTranscript) {
+          setBody((prev) => `${prev ? prev + (prev.endsWith("\n") || prev.endsWith(" ") ? "" : " ") : ""}${finalTranscript}`);
+        }
+        setInterimText(currentInterim);
+      };
+
+      recognition.onerror = (event: any) => {
+        console.warn("Speech recognition error:", event.error);
+        if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+          window.alert("未获取到麦克风权限。请在浏览器地址栏左侧允许麦克风权限，或直接使用系统键盘上的语音麦克风。");
+        }
+        setRecording(false);
+        setInterimText("");
+      };
+
+      recognition.onend = () => {
+        setRecording(false);
+        setInterimText("");
+      };
+
+      recognitionRef.current = recognition;
+      recognition.start();
+    } catch (err) {
+      console.error("Failed to start speech recognition:", err);
+      setRecording(false);
+      window.alert("无法启动语音识别，建议直接点击键盘自带的麦克风输入。");
+    }
   };
 
   return <div className="full-screen editor-screen">
     <header className="screen-header"><button className="icon-button" onClick={props.onCancel}><X size={28} /></button><h1>{props.card ? "编辑卡片" : "新增卡片"}</h1><span /></header>
     <div className="editor-meta"><label><FolderSimple size={18} /><select value={collectionId} onChange={(event) => setCollectionId(event.target.value)}>{props.collections.map((collection) => <option key={collection.id} value={collection.id}>{collection.name}</option>)}</select></label><span>{props.categories.find((category) => category.id === categoryId)?.name ?? "未分类"}<CaretRight size={16} /></span></div>
-    <div className="editor-body"><input className="title-input" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="标题（可选）" /><textarea autoFocus value={body} onChange={(event) => setBody(event.target.value.slice(0, 5000))} placeholder="记录此刻想说的事……" />
+    <div className="editor-body">
+      {recording ? <div className="recording-status-banner"><span className="recording-dot" /> 正在倾听中… {interimText ? `「${interimText}」` : "请说话"}（点击麦克风结束）</div> : null}
+      <input className="title-input" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="标题（留空自动生成中文主题）" />
+      <textarea autoFocus value={body} onChange={(event) => setBody(event.target.value.slice(0, 5000))} placeholder="记录此刻想说的事……" />
       {attachments.length ? <div className="attachment-grid">{attachments.map((attachment) => <figure key={attachment.id}><img src={attachment.dataUrl} alt={attachment.name} /><button onClick={() => setAttachments((items) => items.filter((item) => item.id !== attachment.id))}><X size={15} /></button></figure>)}</div> : null}
     </div>
     <div className="task-options">
@@ -1150,7 +1214,7 @@ const CardEditor = memo(function CardEditor(props: { card?: OioCard; collections
       <TaskToggle checked={tasks.includes("reply")} label="目标语言回复" onClick={() => toggleTask("reply")} />
       <TaskToggle checked={tasks.includes("rewrite")} label="目标语言改写" onClick={() => toggleTask("rewrite")} />
     </div>
-    <footer className="editor-footer"><div className="media-actions"><button onClick={() => fileRef.current?.click()} aria-label="选择图片"><FileImage size={21} /></button><button onClick={() => cameraRef.current?.click()} aria-label="拍照"><Camera size={21} /></button><button className={recording ? "recording" : ""} onClick={startDictation} aria-label="语音输入"><Microphone size={21} /></button><input ref={fileRef} hidden type="file" accept="image/*" multiple onChange={(event) => void handleFiles(event.target.files)} /><input ref={cameraRef} hidden type="file" accept="image/*" capture="environment" onChange={(event) => void handleFiles(event.target.files)} /></div><span>{body.length}/5000</span><button className="primary-button" disabled={!body.trim()} onClick={() => void submit()}>完成</button></footer>
+    <footer className="editor-footer"><div className="media-actions"><button onClick={() => fileRef.current?.click()} aria-label="选择图片"><FileImage size={21} /></button><button onClick={() => cameraRef.current?.click()} aria-label="拍照"><Camera size={21} /></button><button className={recording ? "recording" : ""} onClick={toggleDictation} aria-label={recording ? "停止录音" : "语音输入"}><Microphone size={21} /></button><input ref={fileRef} hidden type="file" accept="image/*" multiple onChange={(event) => void handleFiles(event.target.files)} /><input ref={cameraRef} hidden type="file" accept="image/*" capture="environment" onChange={(event) => void handleFiles(event.target.files)} /></div><span>{body.length}/5000</span><button className="primary-button" disabled={!body.trim()} onClick={() => void submit()}>完成</button></footer>
   </div>;
 });
 
@@ -1167,7 +1231,7 @@ const PRACTICE_TITLES: Record<PracticeMode, string> = {
 
 function CardDetail(props: { card: OioCard; allCards: OioCard[]; initialPractice?: PracticeMode; onBack: () => void; onEdit: () => void; onOpenCard: (id: string) => void; onPractice: (cardId: string, mode: PracticeMode, correct: boolean) => void; onUpdateCard: (next: OioCard) => Promise<void>; onRegenerate: () => Promise<void>; notify: (message: string) => void }) {
   const [practice, setPractice] = useState<PracticeMode | undefined>(props.initialPractice);
-  const [collapsed, setCollapsed] = useState({ rewrite: false, reply: false });
+  const [collapsed, setCollapsed] = useState({ original: false, rewrite: false, reply: false });
   const sentences = props.card.ai.rewrittenSentences.length ? props.card.ai.rewrittenSentences : [props.card.body];
   const blanks = props.card.ai.practiceKeywords;
   const cloze = clozeSentence(sentences.join(" "), blanks);
@@ -1186,12 +1250,22 @@ function CardDetail(props: { card: OioCard; allCards: OioCard[]; initialPractice
   const togglePractice = (mode: PracticeMode) => setPractice((current) => (current === mode ? undefined : mode));
   // 练习期间的中文提示：中文原文或 AI 中文释义（英文卡且无释义时不提供，避免泄底）
   const helper = hasChineseText(props.card.body) ? props.card.body : (props.card.ai.chineseMeaning?.trim() || "");
+  const cardTitle = props.card.title?.trim() || props.card.ai?.suggestedTitle?.trim() || props.card.ai?.chineseMeaning?.trim() || deriveAutoTitle(props.card.body);
 
   return <div className="full-screen detail-screen">
     <header className="detail-header"><button className="icon-button" onClick={props.onBack} aria-label="返回"><ArrowLeft size={22} /></button><div><button className="icon-button accent" onClick={() => void props.onRegenerate()} title="重新生成 AI 内容" aria-label="重新生成 AI 内容"><Lightbulb size={20} /></button><button className="icon-button" onClick={props.onEdit} aria-label="编辑卡片"><NotePencil size={21} /></button></div></header>
     <article className="detail-card">
-      <div className="detail-title"><h1>{props.card.title || "未命名卡片"}</h1><span>{formatFullDate(props.card.createdAt)} · {formatTime(props.card.createdAt)}</span></div>
-      <DetailSection title={practice ? PRACTICE_TITLES[practice] : "目标语言改写"} collapsed={collapsed.rewrite} onToggle={() => setCollapsed((value) => ({ ...value, rewrite: !value.rewrite }))}>
+      <div className="detail-title"><h1>{cardTitle}</h1><span>{formatFullDate(props.card.createdAt)} · {formatTime(props.card.createdAt)}</span></div>
+      {practice ? null : (
+        <DetailSection title="我的记录" collapsed={collapsed.original} onToggle={() => setCollapsed((value) => ({ ...value, original: !value.original }))}>
+          <div className="sentence-row">
+            <p className="card-source-text">{props.card.body}</p>
+            {hasChineseText(props.card.body) ? null : <button onClick={() => speak(props.card.body)} aria-label="朗读原文"><Play size={18} weight="fill" /></button>}
+          </div>
+          <button className="section-copy" onClick={() => void copy(props.card.body)}><Copy size={17} />复制原文</button>
+        </DetailSection>
+      )}
+      <DetailSection title={practice ? PRACTICE_TITLES[practice] : (props.card.ai.rewrittenSentences.length ? "目标语言改写" : "改写与练习")} collapsed={collapsed.rewrite} onToggle={() => setCollapsed((value) => ({ ...value, rewrite: !value.rewrite }))}>
         {practice ? (
           <PracticeArea key={practice} mode={practice} sentence={sentences.join(" ")} blanks={blanks} keywordMeta={props.card.ai.keywordMeta ?? []} recall={recall} helper={helper} legacy={cloze} onPractice={(mode, correct) => props.onPractice(props.card.id, mode, correct)} notify={props.notify} />
         ) : (

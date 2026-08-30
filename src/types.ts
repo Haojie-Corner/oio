@@ -14,6 +14,7 @@ export interface KeywordMeta {
 }
 
 export interface CardAIResult {
+  suggestedTitle?: string;
   organizedSource: string;
   rewrittenSentences: string[];
   reply: string;

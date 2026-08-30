@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clozeSentence, estimateCost, hashCardContent, isSameLocalDay, normalizeWord, splitClozeSegments, toggleWordInList } from "../src/utils";
+import { clozeSentence, deriveAutoTitle, estimateCost, hashCardContent, isSameLocalDay, normalizeWord, splitClozeSegments, toggleWordInList } from "../src/utils";
 
 const blanksOf = (sentence: string, words: string[]) =>
   splitClozeSegments(sentence, words).filter((segment) => segment.type === "blank").map((segment) => segment.value);
@@ -80,5 +80,12 @@ describe("OIO local learning helpers", () => {
     );
     expect(userCards.length).toBe(2);
     expect(userCards.map((c) => c.id)).toEqual(["card_1", "card_2"]);
+  });
+
+  it("derives auto title from AI title, meaning, or body fallback", () => {
+    expect(deriveAutoTitle("Hello world", "欢迎彼得到家做晚饭", "欢迎彼得")).toBe("欢迎彼得到家做晚饭");
+    expect(deriveAutoTitle("Hello world", "", "朋友聚餐")).toBe("朋友聚餐");
+    expect(deriveAutoTitle("今天下了一场暴雨，下班路上一片泥泞。")).toBe("今天下了一场暴雨");
+    expect(deriveAutoTitle("Hey, Peter. Welcome to my home.")).toBe("Hey, Peter");
   });
 });
