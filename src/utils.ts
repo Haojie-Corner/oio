@@ -8,8 +8,33 @@ export function hasChineseText(text: string) {
   return /[\u4e00-\u9fff]/.test(text);
 }
 
+export const GENERIC_OR_AUTO_TITLES = new Set([
+  "未命名卡片",
+  "地道日常表达",
+  "生活随笔记录",
+  "生活随笔与心境",
+  "朋友聚会与拜访",
+  "美食与烹饪聚餐",
+  "晴朗好天气与日常",
+  "职场工作与任务",
+  "学习与语言心得",
+  "出行与旅途碎念",
+  "自我介绍与打招呼",
+  "感谢与礼貌客套",
+  "日常问候与交流",
+  "日常随记",
+]);
+
+export function isAutoOrGenericTitle(title?: string): boolean {
+  if (!title) return true;
+  const t = title.trim();
+  if (!t || !hasChineseText(t)) return true;
+  if (GENERIC_OR_AUTO_TITLES.has(t) || t.startsWith("日常") || t.startsWith("生活随笔")) return true;
+  return false;
+}
+
 export function deriveAutoTitle(body: string, aiTitle?: string, chineseMeaning?: string) {
-  if (aiTitle?.trim() && hasChineseText(aiTitle)) return aiTitle.trim();
+  if (aiTitle?.trim() && hasChineseText(aiTitle) && !isAutoOrGenericTitle(aiTitle)) return aiTitle.trim();
   if (chineseMeaning?.trim() && hasChineseText(chineseMeaning)) return chineseMeaning.trim();
   const trimmed = body.trim();
   if (!trimmed) return "日常随记";

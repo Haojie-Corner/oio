@@ -87,6 +87,7 @@ import {
   formatFullDate,
   formatTime,
   hasChineseText,
+  isAutoOrGenericTitle,
   isSameLocalDay,
   makeId,
   normalizeWord,
@@ -361,7 +362,7 @@ export function App() {
     if (data.settings.provider.enabled) {
       void (async () => {
         try {
-          const ai = await processCardWithAI({ ...saved, ai: { ...saved.ai, status: "idle" } });
+          const ai = await processCardWithAI({ ...saved, title: "", ai: { ...saved.ai, status: "idle" } });
           const aiChineseTitle = (ai.suggestedTitle?.trim() && hasChineseText(ai.suggestedTitle))
             ? ai.suggestedTitle.trim()
             : (ai.chineseMeaning?.trim() && hasChineseText(ai.chineseMeaning)
@@ -524,23 +525,23 @@ export function App() {
           onCancel={() => setView({ name: "home" })}
           onSave={async (card) => {
             try {
-              const tempTitle = card.title?.trim() || deriveAutoTitle(card.body);
-              const saved = await data.saveCard({ ...card, title: tempTitle });
+              const userExplicitTitle = card.title?.trim() && !isAutoOrGenericTitle(card.title) ? card.title.trim() : "";
+              const tempTitle = userExplicitTitle || deriveAutoTitle(card.body);
+              const saved = await data.saveCard({ ...card, title: userExplicitTitle || tempTitle });
               setTransientCard(saved);
               setView({ name: "detail", cardId: saved.id });
               if (data.settings.provider.enabled) {
                 try {
                   await data.saveCard({ ...saved, ai: { ...saved.ai, status: "processing" } });
-                  const ai = await processCardWithAI(saved);
+                  const cardToProcess = { ...saved, title: userExplicitTitle };
+                  const ai = await processCardWithAI(cardToProcess);
                   let finalCard: OioCard = { ...saved, ai, updatedAt: new Date().toISOString() };
                   const aiChineseTitle = (ai.suggestedTitle?.trim() && hasChineseText(ai.suggestedTitle))
                     ? ai.suggestedTitle.trim()
                     : (ai.chineseMeaning?.trim() && hasChineseText(ai.chineseMeaning)
                       ? ai.chineseMeaning.trim().slice(0, 16)
                       : tempTitle);
-                  if (!card.title?.trim() || card.title === tempTitle || !hasChineseText(finalCard.title)) {
-                    finalCard.title = aiChineseTitle;
-                  }
+                  finalCard.title = userExplicitTitle || aiChineseTitle;
                   const folder = ai.suggestedFolder?.trim();
                   if (folder && folder !== "生活集") {
                     const existing = data.collections.find((item) => item.name === folder);
@@ -587,17 +588,16 @@ export function App() {
           }}
           onRegenerate={async () => {
             try {
+              const hasCustomTitle = Boolean(activeCard.title?.trim() && !isAutoOrGenericTitle(activeCard.title));
               await data.saveCard({ ...activeCard, ai: { ...activeCard.ai, status: "processing" } });
-              const ai = await processCardWithAI({ ...activeCard, ai: { ...activeCard.ai, contentHash: undefined } });
+              const ai = await processCardWithAI({ ...activeCard, title: hasCustomTitle ? activeCard.title : "", ai: { ...activeCard.ai, contentHash: undefined } });
               let finalCard: OioCard = { ...activeCard, ai, updatedAt: new Date().toISOString() };
               const aiChineseTitle = (ai.suggestedTitle?.trim() && hasChineseText(ai.suggestedTitle))
                 ? ai.suggestedTitle.trim()
                 : (ai.chineseMeaning?.trim() && hasChineseText(ai.chineseMeaning)
                   ? ai.chineseMeaning.trim().slice(0, 16)
                   : deriveAutoTitle(finalCard.body));
-              if (!finalCard.title.trim() || !hasChineseText(finalCard.title) || finalCard.title === deriveAutoTitle(finalCard.body)) {
-                finalCard.title = aiChineseTitle;
-              }
+              finalCard.title = hasCustomTitle ? activeCard.title : aiChineseTitle;
               const res = await data.saveCard(finalCard);
               setTransientCard(res);
               await data.recordAiUsage(ai);
@@ -1080,14 +1080,18 @@ function TrashScreen(props: {
 }
 
 function CardRow({ card, menuOpen, onToggleMenu, onCloseMenu, onOpen, onEdit, onDelete }: { card: OioCard; menuOpen: boolean; onToggleMenu: () => void; onCloseMenu: () => void; onOpen: () => void; onEdit: () => void; onDelete: () => void }) {
-  const isGeneric = !card.title?.trim() || card.title === "地道日常表达" || card.title === "生活随笔记录" || !hasChineseText(card.title);
-  const rowTitle = (card.ai?.suggestedTitle?.trim() && hasChineseText(card.ai.suggestedTitle) && card.ai.suggestedTitle !== "地道日常表达")
-    ? card.ai.suggestedTitle.trim()
-    : (!isGeneric
+  const aiTitle = card.ai?.suggestedTitle?.trim();
+  const hasValidAiTitle = Boolean(aiTitle && hasChineseText(aiTitle) && !isAutoOrGenericTitle(aiTitle));
+  const hasUserCustomTitle = Boolean(card.title?.trim() && !isAutoOrGenericTitle(card.title));
+  const rowTitle = hasValidAiTitle
+    ? aiTitle!
+    : (hasUserCustomTitle
       ? card.title.trim()
-      : (card.ai?.chineseMeaning?.trim() && hasChineseText(card.ai.chineseMeaning)
-        ? card.ai.chineseMeaning.trim().slice(0, 16)
-        : deriveAutoTitle(card.body)));
+      : (aiTitle && hasChineseText(aiTitle)
+        ? aiTitle
+        : (card.ai?.chineseMeaning?.trim() && hasChineseText(card.ai.chineseMeaning)
+          ? card.ai.chineseMeaning.trim().slice(0, 16)
+          : card.title?.trim() || deriveAutoTitle(card.body))));
   return <article className="card-row" onClick={onOpen}>
     <div className="card-row-copy"><h2>{rowTitle}</h2><p>{cardPreview(card)}</p><span>{formatCardStamp(card.createdAt)} {card.syncState === "pending" ? "· 待同步" : ""}</span></div>
     <div className="row-menu-wrap">
@@ -1351,14 +1355,18 @@ function CardDetail(props: { card: OioCard; allCards: OioCard[]; initialPractice
   const togglePractice = (mode: PracticeMode) => setPractice((current) => (current === mode ? undefined : mode));
   // 练习期间的中文提示：中文原文或 AI 中文释义（英文卡且无释义时不提供，避免泄底）
   const helper = hasChineseText(props.card.body) ? props.card.body : (props.card.ai.chineseMeaning?.trim() || "");
-  const isGeneric = !props.card.title?.trim() || props.card.title === "地道日常表达" || props.card.title === "生活随笔记录" || !hasChineseText(props.card.title);
-  const cardTitle = (props.card.ai?.suggestedTitle?.trim() && hasChineseText(props.card.ai.suggestedTitle) && props.card.ai.suggestedTitle !== "地道日常表达")
-    ? props.card.ai.suggestedTitle.trim()
-    : (!isGeneric
+  const aiTitle = props.card.ai?.suggestedTitle?.trim();
+  const hasValidAiTitle = Boolean(aiTitle && hasChineseText(aiTitle) && !isAutoOrGenericTitle(aiTitle));
+  const hasUserCustomTitle = Boolean(props.card.title?.trim() && !isAutoOrGenericTitle(props.card.title));
+  const cardTitle = hasValidAiTitle
+    ? aiTitle!
+    : (hasUserCustomTitle
       ? props.card.title.trim()
-      : (props.card.ai?.chineseMeaning?.trim() && hasChineseText(props.card.ai.chineseMeaning)
-        ? props.card.ai.chineseMeaning.trim().slice(0, 16)
-        : deriveAutoTitle(props.card.body)));
+      : (aiTitle && hasChineseText(aiTitle)
+        ? aiTitle
+        : (props.card.ai?.chineseMeaning?.trim() && hasChineseText(props.card.ai.chineseMeaning)
+          ? props.card.ai.chineseMeaning.trim().slice(0, 16)
+          : props.card.title?.trim() || deriveAutoTitle(props.card.body))));
 
   return <div className="full-screen detail-screen">
     <header className="detail-header"><button className="icon-button" onClick={props.onBack} aria-label="返回"><ArrowLeft size={22} /></button><div><button className="icon-button accent" onClick={() => void props.onRegenerate()} title="重新生成 AI 内容" aria-label="重新生成 AI 内容"><Lightbulb size={20} /></button><button className="icon-button" onClick={props.onEdit} aria-label="编辑卡片"><NotePencil size={21} /></button></div></header>

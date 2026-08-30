@@ -1,6 +1,6 @@
 import { getLocalFallbackSettings, getSession, getSupabase } from "./cloud";
 import { db } from "./db";
-import { hasChineseText, hashCardContent } from "./utils";
+import { hasChineseText, hashCardContent, isAutoOrGenericTitle } from "./utils";
 import type { AIProviderConfig, CardAIResult, ChatMessage, KeywordMeta, OioCard } from "./types";
 
 const ASSISTANT_SYSTEM_PROMPT = `你是 OIO 随身英语搭子与表达助手。
@@ -71,9 +71,11 @@ type ProviderPayload = {
 };
 
 function buildPrompt(tasks: string[], title: string, content: string) {
-  const hasCustomTitle = Boolean(title.trim() && title.trim() !== "未命名卡片" && title.trim() !== "地道日常表达" && !title.startsWith("日常") && hasChineseText(title));
-  const userTitleInstruction = hasCustomTitle ? `用户指定标题：${title.trim()}` : "标题：无（必须由你根据内容核心思想提炼精准的中文主题总结）";
-  return `你是 OIO 语言自然生长导师 & 语境转译专家。用户会输入中文、英文或中英混合的生活碎片，可能带着抱怨、欣喜、疲惫等真实情绪。根据启用任务生成结果。\n启用任务：${tasks.join(", ")}\n${userTitleInstruction}\n用户记录内容：${content}\n\n要求：\n1. 深度理解场景与情绪，输出母语者在真实生活中会说的地道英文（保留第一人称，语调与用户情绪一致），坚决杜绝生硬直译和中式英语。\n2. targetSentences 只包含 1 个元素：无论输入长短，改写成一句自然地道的目标语言。\n3. suggestedTitle 必须是【根据内容核心思想深度理解并提炼出的精准纯中文主题总结】（4~10个纯中文汉字，如“初次问候与自我介绍”、“晴朗温暖的好天气”、“欢迎彼得到家做晚饭”）。严禁使用“地道日常表达”等泛化套话，严禁直接复制英文！\n4. practiceKeywords 提取 2~4 个最值得学习的动词短语、固定搭配或核心名词短语（不要单个普通单词，每个不超过 4 个单词）。\n5. keywordMeta 为每个挖空短语生成 2 个高迷惑性但当前语境下不匹配的干扰项，以及一句中文解析（说明为什么这个表达比普通说法更地道）。\n6. chineseMeaning 用一句简练中文概括整段意思。\n7. relatedTags 给出 2~4 个描述这段生活场景的中文标签。\n\n只返回 JSON：{"suggestedTitle":"精准中文主题总结(4~10字纯中文，严禁空泛套话)","organizedOriginal":"整理后的原文","targetSentences":["一句自然目标语言"],"targetReply":"简短自然回复","practiceKeywords":["核心短语"],"keywordMeta":[{"phrase":"与 practiceKeywords 对应的短语","distractors":["干扰项1","干扰项2"],"explanation":"中文解析：为什么这个表达更地道"}],"chineseMeaning":"简练中文意思","relatedTags":["场景标签"],"suggestedFolder":"建议归档的专题文件夹名(2~6个字,如 车主日常)"}`;
+  const hasCustomTitle = Boolean(title.trim() && !isAutoOrGenericTitle(title));
+  const userTitleInstruction = hasCustomTitle
+    ? `用户指定自定义标题：${title.trim()}`
+    : "标题：无（必须由你根据【用户记录内容】的核心语义深度理解，提炼精准、生动、具体且言之有物的纯中文主题总结）";
+  return `你是 OIO 语言自然生长导师 & 语境转译专家。用户会输入中文、英文或中英混合的生活碎片，可能带着抱怨、欣喜、疲惫等真实情绪。根据启用任务生成结果。\n启用任务：${tasks.join(", ")}\n${userTitleInstruction}\n用户记录内容：${content}\n\n要求：\n1. 深度理解场景与情绪，输出母语者在真实生活中会说的地道英文（保留第一人称，语调与用户情绪一致），坚决杜绝生硬直译和中式英语。\n2. targetSentences 只包含 1 个元素：无论输入长短，改写成一句自然地道的目标语言。\n3. suggestedTitle 必须是【根据用户输入内容的核心思想深度理解并精准提炼出的纯中文主题总结】（4~10个纯中文汉字，如“吃苹果面条与帮父母”、“寻找附近超市与问路”、“初次问候与自我介绍”、“彼得来家里做客”）。严禁使用“生活随笔与心境”、“朋友聚会与拜访”、“地道日常表达”等空泛套话，严禁直接复制英文！\n4. practiceKeywords 提取 2~4 个最值得学习的动词短语、固定搭配或核心名词短语（不要单个普通单词，每个不超过 4 个单词）。\n5. keywordMeta 为每个挖空短语生成 2 个高迷惑性但当前语境下不匹配的干扰项，以及一句中文解析（说明为什么这个表达比普通说法更地道）。\n6. chineseMeaning 用一句简练中文概括整段意思。\n7. relatedTags 给出 2~4 个描述这段生活场景的中文标签。\n\n只返回 JSON：{"suggestedTitle":"精准中文主题总结(4~10字纯中文，严禁空泛套话)","organizedOriginal":"整理后的原文","targetSentences":["一句自然目标语言"],"targetReply":"简短自然回复","practiceKeywords":["核心短语"],"keywordMeta":[{"phrase":"与 practiceKeywords 对应的短语","distractors":["干扰项1","干扰项2"],"explanation":"中文解析：为什么这个表达更地道"}],"chineseMeaning":"简练中文意思","relatedTags":["场景标签"],"suggestedFolder":"建议归档的专题文件夹名(2~6个字,如 车主日常)"}`;
 }
 
 function stripFence(value: string) {
