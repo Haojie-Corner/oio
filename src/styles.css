@@ -138,3 +138,29 @@
 .card-source-text{font-size:16px;line-height:1.65;color:#222;margin:0;white-space:pre-wrap}
 .title-input, .editor-body textarea{font-size:16px !important;line-height:1.6;-webkit-appearance:none;font-family:inherit;transform:translateZ(0);-webkit-overflow-scrolling:touch;contain:layout paint;will-change:contents}
 .editor-body textarea{width:100%;border:none;outline:none;background:transparent;resize:none;caret-color:#171717;padding:0;margin:0;min-height:160px}
+
+/* 批量选择与管理 */
+.card-list-header{display:flex;align-items:center;justify-content:space-between;margin:16px 0 6px;padding:0 4px}
+.card-list-count{font-size:13px;color:var(--muted);font-weight:500}
+.batch-select-trigger{display:inline-flex;align-items:center;gap:5px;font-size:13.5px;font-weight:600;color:#555;padding:5px 12px;border-radius:8px;background:var(--soft);transition:all .15s ease;cursor:pointer}
+.batch-select-trigger:hover{color:#111;background:#e8e8e4}
+.batch-action-btn{display:inline-flex;align-items:center;gap:6px;font-size:13.5px;font-weight:600;cursor:pointer;border-radius:8px;transition:all .15s ease}
+.batch-action-btn.select-all{color:#171717;padding:4px 8px;background:transparent}
+.batch-action-btn.select-all:hover{background:var(--soft)}
+.batch-action-btn.cancel{color:#666;padding:5px 12px;background:var(--soft)}
+.batch-action-btn.cancel:hover{color:#111;background:#e8e8e4}
+.batch-count{font-weight:400;color:#888;margin-left:2px}
+
+.card-row.in-batch{padding:14px 10px;gap:12px;border-radius:12px;transition:all .15s ease}
+.card-row.in-batch:hover{background:var(--soft)}
+.card-row.in-batch.selected{background:#faf6eb}
+.batch-checkbox{width:22px;height:22px;min-width:22px;border-radius:6px;border:2px solid #ccc;display:grid;place-items:center;flex-shrink:0;transition:all .15s ease;color:#fff;background:#fff;cursor:pointer}
+.batch-checkbox.checked{background:#171717;border-color:#171717}
+
+.batch-floating-bar{position:fixed;z-index:40;bottom:24px;left:50%;transform:translateX(-50%);width:min(520px,calc(100vw - 32px));height:58px;background:#1c1c1cf5;backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);color:#fff;border-radius:29px;box-shadow:0 16px 36px rgba(0,0,0,0.32);display:flex;align-items:center;justify-content:space-between;padding:0 14px 0 20px;box-sizing:border-box;animation:batch-pop .18s ease-out}
+@keyframes batch-pop{from{opacity:0;transform:translate(-50%,14px)}}
+.batch-floating-info{font-size:14px;font-weight:500;color:#d0d0cc}
+.batch-floating-info strong{color:#fff;font-size:16px;margin:0 2px}
+.batch-delete-btn{display:inline-flex;align-items:center;gap:6px;height:40px;padding:0 18px;background:#d83c3c;color:#fff;border-radius:20px;font-size:14px;font-weight:600;transition:background .15s ease;cursor:pointer}
+.batch-delete-btn:hover{background:#e54d4d}
+

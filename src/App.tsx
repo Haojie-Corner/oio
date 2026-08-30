@@ -11,6 +11,7 @@ import {
   CaretUp,
   Check,
   CheckCircle,
+  CheckSquare,
   CircleNotch,
   ClipboardText,
   Clock,
@@ -26,6 +27,7 @@ import {
   House,
   Lightbulb,
   List,
+  ListChecks,
   MagnifyingGlass,
   Microphone,
   NotePencil,
@@ -256,6 +258,8 @@ export function App() {
   const [sessionEmail, setSessionEmail] = useState<string | null>(null);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [transientCard, setTransientCard] = useState<OioCard | null>(null);
+  const [batchMode, setBatchMode] = useState(false);
+  const [selectedCardIds, setSelectedCardIds] = useState<Set<string>>(new Set());
 
   const refreshSession = useCallback(async () => {
     if (!cloudConfigured) { setSessionEmail(null); return; }
@@ -413,11 +417,71 @@ export function App() {
             onBlindBox={() => setBlindBoxOpen(true)}
             onGame={() => setView({ name: "review" })}
           />
+
+          <div className="card-list-header">
+            {batchMode ? (
+              <>
+                <button
+                  type="button"
+                  className="batch-action-btn select-all"
+                  onClick={() => {
+                    if (selectedCardIds.size === filteredCards.length) {
+                      setSelectedCardIds(new Set());
+                    } else {
+                      setSelectedCardIds(new Set(filteredCards.map((c) => c.id)));
+                    }
+                  }}
+                >
+                  <CheckSquare size={16} weight="bold" />
+                  <span>{selectedCardIds.size === filteredCards.length ? "取消全选" : "全选"}</span>
+                  <span className="batch-count">({selectedCardIds.size}/{filteredCards.length})</span>
+                </button>
+                <button
+                  type="button"
+                  className="batch-action-btn cancel"
+                  onClick={() => {
+                    setBatchMode(false);
+                    setSelectedCardIds(new Set());
+                  }}
+                >
+                  完成
+                </button>
+              </>
+            ) : (
+              <>
+                <span className="card-list-count">共 {filteredCards.length} 条记录</span>
+                {filteredCards.length > 0 ? (
+                  <button
+                    type="button"
+                    className="batch-select-trigger"
+                    onClick={() => {
+                      setBatchMode(true);
+                      setSelectedCardIds(new Set());
+                    }}
+                  >
+                    <ListChecks size={16} weight="bold" />
+                    <span>批量选择</span>
+                  </button>
+                ) : null}
+              </>
+            )}
+          </div>
+
           <section className="card-list" aria-label="卡片列表">
             {filteredCards.length ? filteredCards.map((card) => (
               <CardRow
                 key={card.id}
                 card={card}
+                batchMode={batchMode}
+                selected={selectedCardIds.has(card.id)}
+                onToggleSelect={() => {
+                  setSelectedCardIds((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(card.id)) next.delete(card.id);
+                    else next.add(card.id);
+                    return next;
+                  });
+                }}
                 menuOpen={openMenuId === card.id}
                 onToggleMenu={() => setOpenMenuId((current) => (current === card.id ? null : card.id))}
                 onCloseMenu={() => setOpenMenuId(null)}
@@ -429,24 +493,53 @@ export function App() {
           </section>
         </main>
         
-        {/* 底部输入条 */}
-        <div className="bottom-quick-bar">
-          <div className="bottom-quick-bar-left" onClick={() => setView({ name: "editor" })}>
-            <NotePencil size={20} color="#777" />
-            <span className="bottom-quick-bar-text">记录点什么...</span>
+        {/* 批量操作悬浮条 */}
+        {batchMode && selectedCardIds.size > 0 ? (
+          <div className="batch-floating-bar">
+            <div className="batch-floating-info">
+              <span>已选中 <strong>{selectedCardIds.size}</strong> 条记录</span>
+            </div>
+            <button
+              type="button"
+              className="batch-delete-btn"
+              onClick={async () => {
+                const count = selectedCardIds.size;
+                if (window.confirm(`确定要将选中的 ${count} 条记录移入回收站吗？`)) {
+                  for (const id of selectedCardIds) {
+                    await data.deleteCard(id);
+                  }
+                  notify(`已将 ${count} 条记录移入回收站`);
+                  setSelectedCardIds(new Set());
+                  setBatchMode(false);
+                }
+              }}
+            >
+              <Trash size={18} />
+              <span>批量删除 ({selectedCardIds.size})</span>
+            </button>
           </div>
-          <button
-            className="bottom-quick-bar-icon"
-            title="AI 助手"
-            onClick={(e) => {
-              e.stopPropagation();
-              setView({ name: "assistant" });
-            }}
-            aria-label="打开 AI 助手"
-          >
-            <Robot size={22} weight="fill" />
-          </button>
-        </div>
+        ) : null}
+
+        {/* 底部输入条（非批量模式下显示） */}
+        {!batchMode ? (
+          <div className="bottom-quick-bar">
+            <div className="bottom-quick-bar-left" onClick={() => setView({ name: "editor" })}>
+              <NotePencil size={20} color="#777" />
+              <span className="bottom-quick-bar-text">记录点什么...</span>
+            </div>
+            <button
+              className="bottom-quick-bar-icon"
+              title="AI 助手"
+              onClick={(e) => {
+                e.stopPropagation();
+                setView({ name: "assistant" });
+              }}
+              aria-label="打开 AI 助手"
+            >
+              <Robot size={22} weight="fill" />
+            </button>
+          </div>
+        ) : null}
       </div>
 
       {blindBoxOpen ? (
@@ -1094,7 +1187,29 @@ function TrashScreen(props: {
   );
 }
 
-function CardRow({ card, menuOpen, onToggleMenu, onCloseMenu, onOpen, onEdit, onDelete }: { card: OioCard; menuOpen: boolean; onToggleMenu: () => void; onCloseMenu: () => void; onOpen: () => void; onEdit: () => void; onDelete: () => void }) {
+function CardRow({
+  card,
+  menuOpen,
+  onToggleMenu,
+  onCloseMenu,
+  onOpen,
+  onEdit,
+  onDelete,
+  batchMode,
+  selected,
+  onToggleSelect,
+}: {
+  card: OioCard;
+  menuOpen: boolean;
+  onToggleMenu: () => void;
+  onCloseMenu: () => void;
+  onOpen: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+  batchMode?: boolean;
+  selected?: boolean;
+  onToggleSelect?: () => void;
+}) {
   const aiTitle = card.ai?.suggestedTitle?.trim();
   const hasValidAiTitle = Boolean(aiTitle && hasChineseText(aiTitle) && !isAutoOrGenericTitle(aiTitle));
   const hasUserCustomTitle = Boolean(card.title?.trim() && !isAutoOrGenericTitle(card.title));
@@ -1107,19 +1222,42 @@ function CardRow({ card, menuOpen, onToggleMenu, onCloseMenu, onOpen, onEdit, on
         : (card.ai?.chineseMeaning?.trim() && hasChineseText(card.ai.chineseMeaning)
           ? card.ai.chineseMeaning.trim().slice(0, 16)
           : card.title?.trim() || deriveAutoTitle(card.body))));
-  return <article className="card-row" onClick={onOpen}>
-    <div className="card-row-copy"><h2>{rowTitle}</h2><p>{cardPreview(card)}</p><span>{formatCardStamp(card.createdAt)} {card.syncState === "pending" ? "· 待同步" : ""}</span></div>
-    <div className="row-menu-wrap">
-      <button className="more-button" aria-label="卡片菜单" onClick={(event) => { event.stopPropagation(); onToggleMenu(); }}>•••</button>
-      {menuOpen ? <>
-        <div className="menu-backdrop" onClick={(event) => { event.stopPropagation(); onCloseMenu(); }} />
-        <div className="row-menu">
-          <button onClick={(event) => { event.stopPropagation(); onCloseMenu(); onEdit(); }}><NotePencil size={16} />编辑</button>
-          <button className="danger" onClick={(event) => { event.stopPropagation(); onCloseMenu(); onDelete(); }}><Trash size={16} />删除</button>
+
+  return (
+    <article
+      className={`card-row ${batchMode ? "in-batch" : ""} ${selected ? "selected" : ""}`}
+      onClick={batchMode ? onToggleSelect : onOpen}
+    >
+      {batchMode ? (
+        <div
+          className={`batch-checkbox ${selected ? "checked" : ""}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleSelect?.();
+          }}
+        >
+          {selected ? <Check size={14} weight="bold" /> : null}
         </div>
-      </> : null}
-    </div>
-  </article>;
+      ) : null}
+      <div className="card-row-copy">
+        <h2>{rowTitle}</h2>
+        <p>{cardPreview(card)}</p>
+        <span>{formatCardStamp(card.createdAt)} {card.syncState === "pending" ? "· 待同步" : ""}</span>
+      </div>
+      {!batchMode ? (
+        <div className="row-menu-wrap">
+          <button className="more-button" aria-label="卡片菜单" onClick={(event) => { event.stopPropagation(); onToggleMenu(); }}>•••</button>
+          {menuOpen ? <>
+            <div className="menu-backdrop" onClick={(event) => { event.stopPropagation(); onCloseMenu(); }} />
+            <div className="row-menu">
+              <button onClick={(event) => { event.stopPropagation(); onCloseMenu(); onEdit(); }}><NotePencil size={16} />编辑</button>
+              <button className="danger" onClick={(event) => { event.stopPropagation(); onCloseMenu(); onDelete(); }}><Trash size={16} />删除</button>
+            </div>
+          </> : null}
+        </div>
+      ) : null}
+    </article>
+  );
 }
 
 function formatCardStamp(iso: string) {
