@@ -1616,15 +1616,31 @@ function AssistantScreen(props: {
       ))}
       {busy ? <div className="chat-message assistant"><div className="chat-bubble"><CircleNotch className="spin" size={15} /> 正在思考…</div></div> : null}
     </div>
-    <footer className="assistant-input">
-      <textarea
-        value={input}
-        rows={1}
-        placeholder="输入中文、英文或中英混合…"
-        onChange={(event) => setInput(event.target.value)}
-        onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }}
-      />
-      <button className="primary-button" disabled={busy || !input.trim()} onClick={() => void send()} aria-label="发送"><PaperPlaneRight size={18} /></button>
+    <footer className="assistant-input-bar">
+      <div className="assistant-input-container">
+        <input
+          type="text"
+          className="assistant-input-field"
+          value={input}
+          placeholder="输入中文、英文或中英混合…"
+          onChange={(event) => setInput(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              void send();
+            }
+          }}
+        />
+        <button
+          type="button"
+          className={`assistant-send-btn ${input.trim() ? "active" : ""}`}
+          disabled={busy || !input.trim()}
+          onClick={() => void send()}
+          aria-label="发送"
+        >
+          {busy ? <CircleNotch className="spin" size={18} /> : <PaperPlaneRight size={18} weight={input.trim() ? "fill" : "bold"} />}
+        </button>
+      </div>
     </footer>
   </div>;
 }

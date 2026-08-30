@@ -121,3 +121,15 @@
 .preset-pill:hover{border-color:#171717;color:#171717;background:#fff}
 .preset-pill.active{background:#171717;border-color:#171717;color:#fff;font-weight:600}
 
+/* AI 助手输入框与发送按钮优化 */
+.assistant-screen{display:flex;flex-direction:column;height:100vh;height:100dvh;overflow:hidden;max-width:100vw}
+.assistant-body{flex:1;overflow-y:auto;overflow-x:hidden;padding:16px 20px 20px;display:flex;flex-direction:column;gap:12px;max-width:832px;width:100%;margin:0 auto;box-sizing:border-box}
+.assistant-input-bar{flex-shrink:0;position:sticky;bottom:0;left:0;right:0;width:100%;background:#fff;border-top:1px solid var(--line);padding:10px 16px max(12px, env(safe-area-inset-bottom));box-sizing:border-box;z-index:20}
+.assistant-input-container{max-width:832px;margin:0 auto;display:flex;align-items:center;gap:10px;width:100%;box-sizing:border-box}
+.assistant-input-field{flex:1;min-width:0;height:44px;max-height:44px;border:1.5px solid #dededa;border-radius:22px;padding:0 16px;font-size:16px !important;line-height:44px;background:#fafaf8;color:#171717;outline:none;box-sizing:border-box;transition:border-color .15s ease,background-color .15s ease;-webkit-appearance:none}
+.assistant-input-field:focus{border-color:#171717;background:#fff}
+.assistant-send-btn{width:44px;height:44px;min-width:44px;min-height:44px;flex-shrink:0;border-radius:50%;border:none;background:#e6e6e2;color:#8c8c85;display:inline-flex;align-items:center;justify-content:center;cursor:not-allowed;transition:all .15s ease;box-sizing:border-box;padding:0}
+.assistant-send-btn.active{background:#171717;color:#fff;cursor:pointer}
+.assistant-send-btn.active:hover{background:#000;transform:scale(1.04)}
+.assistant-send-btn.active:active{transform:scale(.96)}
+
