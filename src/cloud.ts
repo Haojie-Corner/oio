@@ -76,7 +76,7 @@ export function toCloudCard(card: OioCard, userId: string) {
     ai_result: card.ai || emptyAI,
     created_at: card.createdAt || new Date().toISOString(),
     updated_at: card.updatedAt || new Date().toISOString(),
-    deleted_at: null,
+    deleted_at: card.deletedAt ?? null,
   };
 }
 
@@ -93,7 +93,7 @@ export function fromCloudCard(row: Record<string, unknown>, attachments: CardAtt
     ai: (row.ai_result ?? { ...emptyAI, status: "ready" }) as OioCard["ai"],
     createdAt: String(row.created_at || new Date().toISOString()),
     updatedAt: String(row.updated_at || new Date().toISOString()),
-    deletedAt: undefined,
+    deletedAt: row.deleted_at ? String(row.deleted_at) : undefined,
     syncState: "synced",
     isDemo: false,
   };
@@ -153,8 +153,38 @@ export async function pushCardToCloud(card: OioCard) {
   await broadcastMutation("save", card.id);
 }
 
-/** 实时向云端彻底删除卡片，并通知所有端同步清除 */
-export async function deleteCardOnCloud(id: string) {
+/** 将卡片移入回收站（多端同步标记 deleted_at） */
+export async function deleteCardOnCloud(id: string, deletedAt?: string) {
+  const supabase = getSupabase();
+  const session = await getSession();
+  if (!supabase || !session) return;
+  const userId = session.user.id;
+  const now = deletedAt ?? new Date().toISOString();
+  await supabase
+    .from("cards")
+    .update({ deleted_at: now, updated_at: now })
+    .eq("id", id)
+    .eq("user_id", userId);
+  await broadcastMutation("delete", id);
+}
+
+/** 从回收站恢复卡片 */
+export async function restoreCardOnCloud(id: string) {
+  const supabase = getSupabase();
+  const session = await getSession();
+  if (!supabase || !session) return;
+  const userId = session.user.id;
+  const now = new Date().toISOString();
+  await supabase
+    .from("cards")
+    .update({ deleted_at: null, updated_at: now })
+    .eq("id", id)
+    .eq("user_id", userId);
+  await broadcastMutation("restore", id);
+}
+
+/** 彻底永久删除卡片 */
+export async function purgeCardOnCloud(id: string) {
   const supabase = getSupabase();
   const session = await getSession();
   if (!supabase || !session) return;
@@ -164,7 +194,21 @@ export async function deleteCardOnCloud(id: string) {
     supabase.from("card_attachments").delete().eq("card_id", id).eq("user_id", userId),
   ]);
   await db.cards.delete(id);
-  await broadcastMutation("delete", id);
+  await broadcastMutation("purge", id);
+}
+
+/** 清空回收站 */
+export async function emptyTrashOnCloud() {
+  const supabase = getSupabase();
+  const session = await getSession();
+  if (!supabase || !session) return;
+  const userId = session.user.id;
+  await supabase
+    .from("cards")
+    .delete()
+    .eq("user_id", userId)
+    .not("deleted_at", "is", null);
+  await broadcastMutation("empty_trash");
 }
 
 /** 订阅 Supabase WebSocket 广播与变更通道 */
@@ -214,11 +258,12 @@ export function subscribeToCloudChanges(onUpdate: () => void) {
 export interface SyncResult {
   merged: OioCard[];
   activeCount: number;
+  trashCount: number;
 }
 
 /**
  * 核心云端对齐函数：以云端为绝对真实数据源（Single Source of Truth）。
- * 云端没有的卡片（已被其他设备删除）立即从本地彻底清除，坚决杜绝“死灰复燃”。
+ * 云端没有的卡片立即从本地彻底清除，有 deleted_at 的同步为回收站卡片。
  */
 export async function syncCloudData(onProgress?: (message: string) => void): Promise<SyncResult> {
   const supabase = getSupabase();
@@ -263,7 +308,7 @@ export async function syncCloudData(onProgress?: (message: string) => void): Pro
   // 3. 构建云端卡片列表
   const cloudCards: OioCard[] = remoteRows.map((row) => fromCloudCard(row, attachmentMap.get(row.id) ?? []));
 
-  // 4. 本地数据库强制与云端对齐（清除被删卡片与本地初始 demo）
+  // 4. 本地数据库强制与云端对齐（清除本地多余的未入云卡片与初始 demo）
   const localCards = await db.cards.toArray();
   const staleLocalIds = localCards
     .filter((c) => !remoteIdSet.has(c.id))
@@ -277,11 +322,9 @@ export async function syncCloudData(onProgress?: (message: string) => void): Pro
   }));
 
   await db.transaction("rw", db.cards, db.collections, db.categories, async () => {
-    // 清除本地多余/已被其他端删除的卡片
     if (staleLocalIds.length) {
       await db.cards.bulkDelete(staleLocalIds);
     }
-    // 写入云端最新卡片
     if (cloudCards.length) {
       await db.cards.bulkPut(cloudCards);
     }
@@ -291,7 +334,9 @@ export async function syncCloudData(onProgress?: (message: string) => void): Pro
 
   await db.syncQueue.clear();
 
-  return { merged: cloudCards, activeCount: cloudCards.length };
+  const activeCount = cloudCards.filter((c) => !c.deletedAt).length;
+  const trashCount = cloudCards.filter((c) => !!c.deletedAt).length;
+  return { merged: cloudCards, activeCount, trashCount };
 }
 
 export async function saveCloudSettings(settings: UserSettings) {

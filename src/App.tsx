@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   ArrowLeft,
+  ArrowRight,
   ArrowsLeftRight,
   BookOpenText,
   Brain,
   Camera,
   CaretDown,
   CaretRight,
+  CaretUp,
   Check,
   CheckCircle,
   CircleNotch,
@@ -14,6 +16,7 @@ import {
   Clock,
   CloudArrowUp,
   Copy,
+  DotsThree,
   DownloadSimple,
   Ear,
   Eye,
@@ -44,9 +47,12 @@ import { askAssistant, processCardWithAI } from "./ai";
 import {
   cloudConfigured,
   deleteCardOnCloud,
+  emptyTrashOnCloud,
   getSession,
+  purgeCardOnCloud,
   pushCardToCloud,
   resetPassword,
+  restoreCardOnCloud,
   saveCloudSettings,
   saveProviderSecurely,
   signIn,
@@ -107,6 +113,7 @@ declare global {
 
 function useOioData() {
   const [cards, setCards] = useState<OioCard[]>([]);
+  const [trashCards, setTrashCards] = useState<OioCard[]>([]);
   const [collections, setCollections] = useState<OioCollection[]>([]);
   const [categories, setCategories] = useState<OioCategory[]>([]);
   const [settings, setSettings] = useState<UserSettings>(defaultSettings);
@@ -122,6 +129,7 @@ function useOioData() {
       db.practice.toArray(),
     ]);
     setCards(nextCards.filter((card) => !card.deletedAt).sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
+    setTrashCards(nextCards.filter((card) => !!card.deletedAt).sort((a, b) => (b.deletedAt ?? "").localeCompare(a.deletedAt ?? "")));
     setCollections(nextCollections);
     setCategories(nextCategories);
     if (storedSettings) setSettings(storedSettings);
@@ -142,9 +150,39 @@ function useOioData() {
   }, [reload]);
 
   const deleteCard = useCallback(async (id: string) => {
+    const card = await db.cards.get(id);
+    if (!card) return;
+    const now = new Date().toISOString();
+    const next = { ...card, deletedAt: now, updatedAt: now, syncState: "synced" as const };
+    await db.cards.put(next);
+    await reload();
+    void deleteCardOnCloud(id, now).catch(() => undefined);
+  }, [reload]);
+
+  const restoreCard = useCallback(async (id: string) => {
+    const card = await db.cards.get(id);
+    if (!card) return;
+    const now = new Date().toISOString();
+    const next = { ...card, deletedAt: undefined, updatedAt: now, syncState: "synced" as const };
+    await db.cards.put(next);
+    await reload();
+    void restoreCardOnCloud(id).catch(() => undefined);
+  }, [reload]);
+
+  const purgeCard = useCallback(async (id: string) => {
     await db.cards.delete(id);
     await reload();
-    void deleteCardOnCloud(id).catch(() => undefined);
+    void purgeCardOnCloud(id).catch(() => undefined);
+  }, [reload]);
+
+  const emptyTrash = useCallback(async () => {
+    const all = await db.cards.toArray();
+    const trashIds = all.filter((c) => !!c.deletedAt).map((c) => c.id);
+    if (trashIds.length) {
+      await db.cards.bulkDelete(trashIds);
+      await reload();
+      void emptyTrashOnCloud().catch(() => undefined);
+    }
   }, [reload]);
 
   const saveSettings = useCallback(async (next: UserSettings) => {
@@ -174,7 +212,7 @@ function useOioData() {
     await reload();
   }, [reload]);
 
-  return { cards, collections, categories, settings, practiceDates, ready, reload, saveCard, deleteCard, saveSettings, recordAiUsage, addCollection };
+  return { cards, trashCards, collections, categories, settings, practiceDates, ready, reload, saveCard, deleteCard, restoreCard, purgeCard, emptyTrash, saveSettings, recordAiUsage, addCollection };
 }
 
 export function App() {
@@ -182,6 +220,7 @@ export function App() {
   const [view, setView] = useState<AppView>({ name: "home" });
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [blindBoxOpen, setBlindBoxOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -263,13 +302,14 @@ export function App() {
     return data.cards.filter((card) => card.collectionId === activeCollection && (!needle || `${card.title} ${card.body} ${cardPreview(card)}`.toLowerCase().includes(needle)));
   }, [activeCollection, data.cards, query]);
 
-  const openReview = useCallback((kind: "today" | "yesterday" | "random") => {
-    const date = new Date();
-    if (kind === "yesterday") date.setDate(date.getDate() - 1);
-    const pool = kind === "random" ? data.cards : data.cards.filter((card) => isSameLocalDay(card.createdAt, date));
-    const card = pool[Math.floor(Math.random() * pool.length)];
-    if (!card) return notify(kind === "yesterday" ? "昨天还没有卡片" : "暂时没有可回顾的卡片");
-    setView({ name: "detail", cardId: card.id, practice: "reveal" });
+  // 回顾近期（近 1 个月内的最多 10 张卡片）
+  const openRecent = useCallback(() => {
+    const oneMonthAgo = Date.now() - 30 * 86400 * 1000;
+    const recent = data.cards
+      .filter((c) => new Date(c.createdAt).getTime() >= oneMonthAgo)
+      .slice(0, 10);
+    if (!recent.length) return notify("近一个月内暂无卡片");
+    setView({ name: "recall", cards: recent, index: 0 });
   }, [data.cards, notify]);
 
   const createContentCard = useCallback(async (content: string) => {
@@ -319,10 +359,13 @@ export function App() {
           onQuery={setQuery}
           onMenu={() => setDrawerOpen(true)}
           onSearch={() => setSearchOpen((open) => !open)}
-          onSettings={() => setSettingsOpen(true)}
         />
         <main className="home-main">
-          <ReviewStrip onReview={openReview} />
+          <ReviewStrip
+            onRecent={openRecent}
+            onBlindBox={() => setBlindBoxOpen(true)}
+            onGame={() => setView({ name: "review" })}
+          />
           <section className="card-list" aria-label="卡片列表">
             {filteredCards.length ? filteredCards.map((card) => (
               <CardRow
@@ -333,17 +376,38 @@ export function App() {
                 onCloseMenu={() => setOpenMenuId(null)}
                 onOpen={() => { setOpenMenuId(null); setView({ name: "detail", cardId: card.id }); }}
                 onEdit={() => { setOpenMenuId(null); setView({ name: "editor", cardId: card.id }); }}
-                onDelete={() => { setOpenMenuId(null); void data.deleteCard(card.id).then(() => notify("卡片已删除")); }}
+                onDelete={() => { setOpenMenuId(null); void data.deleteCard(card.id).then(() => notify("卡片已移入回收站")); }}
               />
             )) : <EmptyState onAdd={() => setView({ name: "editor" })} />}
           </section>
         </main>
-        <button className="floating-add" aria-label="新增卡片" onClick={() => setView({ name: "editor" })}><Plus size={24} /></button>
+        
+        {/* 底部输入条（与对标设计一致） */}
+        <div className="bottom-quick-bar" onClick={() => setView({ name: "editor" })}>
+          <NotePencil size={20} color="#777" />
+          <span className="bottom-quick-bar-text">记录点什么...</span>
+          <div className="bottom-quick-bar-icon" title="AI 智能记录">
+            <Sparkle size={19} weight="fill" />
+          </div>
+        </div>
       </div>
+
+      {blindBoxOpen ? (
+        <BlindBoxModal
+          cards={data.cards}
+          onClose={() => setBlindBoxOpen(false)}
+          onStart={(selected) => {
+            setBlindBoxOpen(false);
+            setView({ name: "recall", cards: selected, index: 0 });
+          }}
+          notify={notify}
+        />
+      ) : null}
 
       {drawerOpen ? (
         <SideDrawer
           cards={data.cards}
+          trashCount={data.trashCards.length}
           collections={data.collections}
           activeCollection={activeCollection}
           settings={data.settings}
@@ -354,6 +418,7 @@ export function App() {
             const name = window.prompt("新集合名称");
             if (name?.trim()) void data.addCollection(name.trim());
           }}
+          onTrash={() => { setDrawerOpen(false); setView({ name: "trash" }); }}
           onSettings={() => { setDrawerOpen(false); setSettingsOpen(true); }}
           onAssistant={() => { setDrawerOpen(false); setView({ name: "assistant" }); }}
           onReview={() => { setDrawerOpen(false); setView({ name: "review" }); }}
@@ -410,7 +475,6 @@ export function App() {
                 await data.saveCard({ ...saved, ai: { ...saved.ai, status: "processing" } });
                 const ai = await processCardWithAI(saved);
                 let finalCard: OioCard = { ...saved, ai, updatedAt: new Date().toISOString() };
-                // 智能归档：AI 建议的专题文件夹不存在则自动创建
                 const folder = ai.suggestedFolder?.trim();
                 if (folder && folder !== "生活集") {
                   const existing = data.collections.find((item) => item.name === folder);
@@ -451,6 +515,27 @@ export function App() {
               notify("已重新生成");
             } catch (error) { notify(error instanceof Error ? error.message : "AI 暂不可用"); }
           }}
+          notify={notify}
+        />
+      ) : null}
+
+      {view.name === "recall" ? (
+        <RecallScreen
+          cards={view.cards}
+          initialIndex={view.index}
+          onBack={() => setView({ name: "home" })}
+          onEdit={(id) => setView({ name: "editor", cardId: id })}
+          notify={notify}
+        />
+      ) : null}
+
+      {view.name === "trash" ? (
+        <TrashScreen
+          cards={data.trashCards}
+          onBack={() => setView({ name: "home" })}
+          onRestore={async (id) => { await data.restoreCard(id); }}
+          onPurge={async (id) => { await data.purgeCard(id); }}
+          onEmptyTrash={async () => { await data.emptyTrash(); }}
           notify={notify}
         />
       ) : null}
@@ -498,14 +583,13 @@ function HomeHeader(props: {
   collection: string; collections: OioCollection[]; activeCollection: string; switcherOpen: boolean;
   onSelectCollection: (id: string) => void; onToggleSwitcher: () => void;
   online: boolean; searchOpen: boolean; query: string;
-  onQuery: (value: string) => void; onMenu: () => void; onSearch: () => void; onSettings: () => void;
+  onQuery: (value: string) => void; onMenu: () => void; onSearch: () => void;
 }) {
   return <header className="home-header">
     <button className="icon-button" onClick={props.onMenu} aria-label="打开侧栏"><List size={22} /></button>
     <button className="collection-switcher" onClick={props.onToggleSwitcher} aria-label="切换集合">{props.collection}<CaretDown size={13} /></button>
     <div className="header-actions">
       <span className={`network-dot ${props.online ? "online" : "offline"}`} title={props.online ? "在线" : "离线"} />
-      <button className="icon-button accent" onClick={props.onSettings} aria-label="AI 与设置"><Brain size={21} /></button>
       <button className="icon-button" onClick={props.onSearch} aria-label="搜索"><MagnifyingGlass size={22} /></button>
     </div>
     {props.switcherOpen ? <>
@@ -522,12 +606,375 @@ function HomeHeader(props: {
   </header>;
 }
 
-function ReviewStrip({ onReview }: { onReview: (kind: "today" | "yesterday" | "random") => void }) {
+function ReviewStrip({
+  onRecent,
+  onBlindBox,
+  onGame,
+}: {
+  onRecent: () => void;
+  onBlindBox: () => void;
+  onGame: () => void;
+}) {
   return <nav className="review-strip" aria-label="快速回顾">
-    <button onClick={() => onReview("today")}><House size={16} />回顾今天</button>
-    <button onClick={() => onReview("yesterday")}><BookOpenText size={16} />回顾昨天</button>
-    <button onClick={() => onReview("random")}><Shuffle size={16} />记忆盲盒</button>
+    <button onClick={onRecent}>回顾近期</button>
+    <button onClick={onBlindBox}>记忆盲盒</button>
+    <button onClick={onGame}>记忆游戏<span className="badge-dot" /></button>
   </nav>;
+}
+
+type TimeRange = "week" | "month" | "quarter" | "year" | "all";
+
+function BlindBoxModal(props: {
+  cards: OioCard[];
+  onClose: () => void;
+  onStart: (selectedCards: OioCard[]) => void;
+  notify: (msg: string) => void;
+}) {
+  const [range, setRange] = useState<TimeRange>("quarter");
+  const [count, setCount] = useState(5);
+
+  const handleStart = () => {
+    const now = Date.now();
+    const rangeMs: Record<TimeRange, number> = {
+      week: 7 * 86400 * 1000,
+      month: 30 * 86400 * 1000,
+      quarter: 90 * 86400 * 1000,
+      year: 365 * 86400 * 1000,
+      all: Infinity,
+    };
+    const maxAge = rangeMs[range];
+    const filtered = props.cards.filter((card) => {
+      const cardTime = new Date(card.createdAt).getTime();
+      return now - cardTime <= maxAge;
+    });
+
+    if (!filtered.length) {
+      props.notify("该时间范围内暂无卡片");
+      return;
+    }
+
+    const shuffled = [...filtered].sort(() => 0.5 - Math.random());
+    const selected = shuffled.slice(0, count);
+    props.onStart(selected);
+  };
+
+  return (
+    <div className="modal-overlay" onClick={props.onClose}>
+      <div className="modal-box" onClick={(e) => e.stopPropagation()}>
+        <header className="modal-header">
+          <h2>记忆盲盒</h2>
+          <button className="modal-close" onClick={props.onClose} aria-label="关闭"><X size={18} /></button>
+        </header>
+
+        <label style={{ fontSize: "14px", color: "#666", fontWeight: 600 }}>时间范围</label>
+        <div className="segmented-pills">
+          <button className={range === "week" ? "active" : ""} onClick={() => setRange("week")}>本周</button>
+          <button className={range === "month" ? "active" : ""} onClick={() => setRange("month")}>本月</button>
+          <button className={range === "quarter" ? "active" : ""} onClick={() => setRange("quarter")}>本季度</button>
+          <button className={range === "year" ? "active" : ""} onClick={() => setRange("year")}>本年</button>
+          <button className={range === "all" ? "active" : ""} onClick={() => setRange("all")}>全部</button>
+        </div>
+
+        <div className="slider-wrap">
+          <div className="slider-header">
+            <span>卡片数量</span>
+            <strong>{count}</strong>
+          </div>
+          <input
+            type="range"
+            min={1}
+            max={10}
+            step={1}
+            value={count}
+            onChange={(e) => setCount(Number(e.target.value))}
+            className="slider-input"
+          />
+          <div className="slider-ticks">
+            <span>1</span>
+            <span>10</span>
+          </div>
+        </div>
+
+        <footer className="modal-footer">
+          <button className="primary-button" onClick={handleStart}>开始回忆</button>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+function RecallScreen(props: {
+  cards: OioCard[];
+  initialIndex?: number;
+  onBack: () => void;
+  onEdit: (cardId: string) => void;
+  notify: (msg: string) => void;
+}) {
+  const [index, setIndex] = useState(props.initialIndex ?? 0);
+  const [collapsed, setCollapsed] = useState({ record: false, rewrite: false });
+  const [practiceMode, setPracticeMode] = useState<PracticeMode | undefined>(undefined);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const touchStartX = useRef<number | null>(null);
+
+  const card = props.cards[index];
+  const total = props.cards.length;
+
+  const handleNext = () => {
+    if (index < total - 1) {
+      setIndex((i) => i + 1);
+      setPracticeMode(undefined);
+    }
+  };
+
+  const handlePrev = () => {
+    if (index > 0) {
+      setIndex((i) => i - 1);
+      setPracticeMode(undefined);
+    }
+  };
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    touchStartX.current = e.touches[0].clientX;
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    if (touchStartX.current === null) return;
+    const diff = e.changedTouches[0].clientX - touchStartX.current;
+    if (diff < -50) handleNext();
+    if (diff > 50) handlePrev();
+    touchStartX.current = null;
+  };
+
+  const copy = async (text: string) => {
+    await navigator.clipboard.writeText(text);
+    props.notify("已复制");
+  };
+
+  if (!card) return null;
+
+  const sentences = card.ai.rewrittenSentences.length ? card.ai.rewrittenSentences : (card.body ? [card.body] : []);
+  const blanks = card.ai.practiceKeywords || [];
+  const cloze = clozeSentence(sentences.join(" "), blanks);
+  const recall = recallPromptOf(card);
+  const helper = hasChineseText(card.body) ? card.body : (card.ai.chineseMeaning?.trim() || "");
+
+  return (
+    <div className="recall-screen" onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}>
+      <header className="recall-header">
+        <button className="icon-button" onClick={props.onBack} aria-label="返回">
+          <ArrowLeft size={22} />
+        </button>
+        <span className="recall-progress">{index + 1} / {total}</span>
+        <div style={{ justifySelf: "end", position: "relative" }}>
+          <button className="icon-button" onClick={() => setMenuOpen((o) => !o)} aria-label="更多">
+            <DotsThree size={24} weight="bold" />
+          </button>
+          {menuOpen ? (
+            <>
+              <div className="menu-backdrop" onClick={() => setMenuOpen(false)} />
+              <div className="row-menu" style={{ right: 0, top: 42 }}>
+                <button onClick={() => { setMenuOpen(false); props.onEdit(card.id); }}>
+                  <NotePencil size={16} />编辑卡片
+                </button>
+                <button onClick={() => { setMenuOpen(false); void copy(`${card.title}\n${card.body}\n${sentences.join("\n")}`); }}>
+                  <Copy size={16} />复制全部
+                </button>
+              </div>
+            </>
+          ) : null}
+        </div>
+      </header>
+
+      {index > 0 ? (
+        <button className="floating-flip-nav left" onClick={handlePrev} aria-label="上一张">
+          <ArrowLeft size={18} />
+        </button>
+      ) : null}
+
+      {index < total - 1 ? (
+        <button className="floating-flip-nav right" onClick={handleNext} aria-label="下一张">
+          <ArrowRight size={18} />
+        </button>
+      ) : null}
+
+      <main className="recall-main">
+        <article className="recall-card">
+          <div className="recall-card-header">
+            <h1>{card.title || "未命名卡片"}</h1>
+            <span>{formatFullDate(card.createdAt)} · {formatTime(card.createdAt)}</span>
+          </div>
+
+          <section className="recall-section">
+            <div className="recall-section-head" onClick={() => setCollapsed((c) => ({ ...c, record: !c.record }))}>
+              <span>我的记录</span>
+              {collapsed.record ? <CaretDown size={14} /> : <CaretUp size={14} />}
+            </div>
+            {!collapsed.record ? (
+              <div style={{ display: "flex", flexDirection: "column" }}>
+                <p className="recall-body-text">{card.body || "（无文字记录）"}</p>
+                <button className="recall-copy-btn" onClick={() => void copy(card.body)}>
+                  <Copy size={15} />复制
+                </button>
+              </div>
+            ) : null}
+          </section>
+
+          {sentences.length ? (
+            <section className="recall-section">
+              <div className="recall-section-head" onClick={() => setCollapsed((c) => ({ ...c, rewrite: !c.rewrite }))}>
+                <span>目标语言改写</span>
+                {collapsed.rewrite ? <CaretDown size={14} /> : <CaretUp size={14} />}
+              </div>
+              {!collapsed.rewrite ? (
+                <>
+                  {practiceMode ? (
+                    <PracticeArea
+                      key={practiceMode}
+                      mode={practiceMode}
+                      sentence={sentences.join(" ")}
+                      blanks={blanks}
+                      keywordMeta={card.ai.keywordMeta ?? []}
+                      recall={recall}
+                      helper={helper}
+                      legacy={cloze}
+                      onPractice={(_mode, _correct) => {}}
+                      notify={props.notify}
+                    />
+                  ) : (
+                    <>
+                      {sentences.map((sentence) => (
+                        <div className="sentence-row" key={sentence}>
+                          <p style={{ margin: "6px 0", fontSize: "16.5px", lineHeight: 1.6 }}>{sentence}</p>
+                          <button onClick={() => speak(sentence)} aria-label="朗读本句">
+                            <Play size={18} weight="fill" />
+                          </button>
+                        </div>
+                      ))}
+                      {card.ai.keywordMeta?.length ? (
+                        <details className="practice-helper" style={{ marginTop: 8 }}>
+                          <summary>表达解析（为什么这样说更地道）</summary>
+                          {card.ai.keywordMeta.map((meta) => (
+                            <p key={meta.phrase}><strong>{meta.phrase}</strong> — {meta.explanation}</p>
+                          ))}
+                        </details>
+                      ) : null}
+                    </>
+                  )}
+                </>
+              ) : null}
+            </section>
+          ) : null}
+        </article>
+      </main>
+
+      <footer className="recall-bottom-bar">
+        <button className="recall-finish-btn" onClick={props.onBack}>
+          结束回忆 <Check size={18} weight="bold" />
+        </button>
+        <div className="recall-tool-strip">
+          <button title="切换改写显示" onClick={() => setCollapsed((c) => ({ ...c, rewrite: !c.rewrite }))}>
+            <ArrowsLeftRight size={20} />
+          </button>
+          <button title="听力朗读" onClick={() => { if (sentences.length) speak(sentences.join(" ")); }}>
+            <Ear size={20} />
+          </button>
+          <button title="查看原文" onClick={() => setCollapsed((c) => ({ ...c, record: !c.record }))}>
+            <Eye size={20} />
+          </button>
+          <button
+            className={practiceMode === "cloze" ? "active" : ""}
+            title="挖空练习"
+            onClick={() => setPracticeMode((m) => (m === "cloze" ? undefined : "cloze"))}
+          >
+            <span style={{ fontWeight: 700, fontSize: "14px" }}>填</span>
+          </button>
+          <button
+            className={practiceMode === "choice" ? "active" : ""}
+            title="选择题"
+            onClick={() => setPracticeMode((m) => (m === "choice" ? undefined : "choice"))}
+          >
+            <span style={{ fontWeight: 700, fontSize: "14px" }}>选</span>
+          </button>
+          <button title="朗读全部" onClick={() => { if (sentences.length) speak(sentences.join(" ")); }}>
+            <Play size={20} weight="fill" />
+          </button>
+        </div>
+      </footer>
+    </div>
+  );
+}
+
+function TrashScreen(props: {
+  cards: OioCard[];
+  onBack: () => void;
+  onRestore: (id: string) => Promise<void>;
+  onPurge: (id: string) => Promise<void>;
+  onEmptyTrash: () => Promise<void>;
+  notify: (msg: string) => void;
+}) {
+  return (
+    <div className="full-screen trash-screen">
+      <header className="screen-header">
+        <button className="icon-button" onClick={props.onBack} aria-label="返回">
+          <ArrowLeft size={22} />
+        </button>
+        <h1>回收站 ({props.cards.length})</h1>
+        {props.cards.length ? (
+          <button
+            className="text-button"
+            style={{ justifySelf: "end", color: "var(--danger)", fontWeight: 600 }}
+            onClick={() => {
+              if (window.confirm("确定要清空回收站吗？清空后所有已删除卡片将无法恢复。")) {
+                void props.onEmptyTrash().then(() => props.notify("回收站已清空"));
+              }
+            }}
+          >
+            清空
+          </button>
+        ) : <div />}
+      </header>
+
+      <main className="trash-list">
+        {props.cards.length ? (
+          props.cards.map((card) => (
+            <article key={card.id} className="trash-item">
+              <div className="trash-item-info">
+                <h3>{card.title || card.body.slice(0, 20) || "未命名卡片"}</h3>
+                <p>{card.body || cardPreview(card)}</p>
+                <span>删除时间：{card.deletedAt ? formatFullDate(card.deletedAt) : "未知"}</span>
+              </div>
+              <div className="trash-item-actions">
+                <button
+                  className="trash-restore-btn"
+                  onClick={() => {
+                    void props.onRestore(card.id).then(() => props.notify("卡片已恢复"));
+                  }}
+                >
+                  恢复
+                </button>
+                <button
+                  className="trash-purge-btn"
+                  onClick={() => {
+                    if (window.confirm("确定永久删除此卡片吗？")) {
+                      void props.onPurge(card.id).then(() => props.notify("已彻底删除"));
+                    }
+                  }}
+                >
+                  <Trash size={16} />
+                </button>
+              </div>
+            </article>
+          ))
+        ) : (
+          <div className="empty-state">
+            <Trash size={44} style={{ color: "#aaa" }} />
+            <h2>回收站为空</h2>
+            <p>删除的卡片会暂存在这里，支持随时恢复或彻底清空。</p>
+          </div>
+        )}
+      </main>
+    </div>
+  );
 }
 
 function CardRow({ card, menuOpen, onToggleMenu, onCloseMenu, onOpen, onEdit, onDelete }: { card: OioCard; menuOpen: boolean; onToggleMenu: () => void; onCloseMenu: () => void; onOpen: () => void; onEdit: () => void; onDelete: () => void }) {
@@ -562,8 +1009,8 @@ function EmptyState({ onAdd }: { onAdd: () => void }) {
 }
 
 function SideDrawer(props: {
-  cards: OioCard[]; collections: OioCollection[]; activeCollection: string; settings: UserSettings; sessionEmail: string | null; practiceDates: string[];
-  onSelectCollection: (id: string) => void; onAddCollection: () => void; onSettings: () => void;
+  cards: OioCard[]; trashCount: number; collections: OioCollection[]; activeCollection: string; settings: UserSettings; sessionEmail: string | null; practiceDates: string[];
+  onSelectCollection: (id: string) => void; onAddCollection: () => void; onTrash: () => void; onSettings: () => void;
   onAssistant: () => void; onReview: () => void; onImport: () => void; onClose: () => void;
 }) {
   const activityDays = new Set(props.cards.map((card) => card.createdAt.slice(0, 10))).size;
@@ -577,6 +1024,7 @@ function SideDrawer(props: {
     </div>
     <ActivityGrid cards={props.cards} practiceDates={props.practiceDates} />
     <button className="drawer-link accent" onClick={props.onAssistant}><Brain size={21} />AI 助手<span>{props.settings.provider.enabled ? "Beta" : "待配置"}</span></button>
+    <button className="drawer-link" onClick={props.onTrash}><Trash size={21} />回收站<span>{props.trashCount}</span></button>
     <button className="drawer-link" onClick={props.onReview}><Clock size={21} />回忆</button>
     <button className="drawer-link" onClick={props.onImport}><ClipboardText size={21} />导入语料</button>
     <div className="drawer-section-title">收藏夹</div>

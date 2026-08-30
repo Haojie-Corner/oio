@@ -107,6 +107,8 @@ export type AppView =
   | { name: "home" }
   | { name: "editor"; cardId?: string }
   | { name: "detail"; cardId: string; practice?: PracticeMode }
+  | { name: "recall"; cards: OioCard[]; index: number }
+  | { name: "trash" }
   | { name: "settings" }
   | { name: "auth" }
   | { name: "assistant" }
