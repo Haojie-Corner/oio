@@ -576,16 +576,6 @@ export function App() {
                     <ClipboardText size={15} />
                     <span>语言整理</span>
                   </button>
-                  <button
-                    type="button"
-                    disabled={batchProcessing}
-                    className="batch-action-pill accent"
-                    onClick={() => void runBatchAi("all")}
-                    title="一键同时完成改写、回复、整理与主题提炼"
-                  >
-                    <Sparkle size={15} weight="fill" />
-                    <span>完整 AI 处理</span>
-                  </button>
                 </div>
               </div>
             ) : (
@@ -638,38 +628,27 @@ export function App() {
         {batchMode && selectedCardIds.size > 0 ? (
           <div className="batch-floating-bar">
             <div className="batch-floating-info">
-              <span>已选 <strong>{selectedCardIds.size}</strong> 项</span>
+              <span>已选中 <strong>{selectedCardIds.size}</strong> 条记录</span>
             </div>
-            <div className="batch-floating-btns">
-              <button
-                type="button"
-                disabled={batchProcessing}
-                className="batch-floating-ai-btn"
-                onClick={() => void runBatchAi("all")}
-              >
-                <Sparkle size={16} weight="fill" />
-                <span>批量 AI 处理</span>
-              </button>
-              <button
-                type="button"
-                disabled={batchProcessing}
-                className="batch-delete-btn"
-                onClick={async () => {
-                  const count = selectedCardIds.size;
-                  if (window.confirm(`确定要将选中的 ${count} 条记录移入回收站吗？`)) {
-                    for (const id of selectedCardIds) {
-                      await data.deleteCard(id);
-                    }
-                    notify(`已将 ${count} 条记录移入回收站`);
-                    setSelectedCardIds(new Set());
-                    setBatchMode(false);
+            <button
+              type="button"
+              disabled={batchProcessing}
+              className="batch-delete-btn"
+              onClick={async () => {
+                const count = selectedCardIds.size;
+                if (window.confirm(`确定要将选中的 ${count} 条记录移入回收站吗？`)) {
+                  for (const id of selectedCardIds) {
+                    await data.deleteCard(id);
                   }
-                }}
-              >
-                <Trash size={18} />
-                <span>删除</span>
-              </button>
-            </div>
+                  notify(`已将 ${count} 条记录移入回收站`);
+                  setSelectedCardIds(new Set());
+                  setBatchMode(false);
+                }
+              }}
+            >
+              <Trash size={18} />
+              <span>批量删除 ({selectedCardIds.size})</span>
+            </button>
           </div>
         ) : null}
 
